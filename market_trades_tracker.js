@@ -26,6 +26,11 @@
     }
 
     /* === Global variables === */
+    unsafeWindow.historyScreen = 'list'; // 'list', 'stats'
+
+    // Will be set after page init (below script)
+    let SEARCHABLE_ITEMS = [];
+
     const WEBCALL_HOOKS = {
         before: {},
         after: {},
@@ -464,8 +469,8 @@
                 ],
             },
             help: {
+                text: 'This script keeps track of all your market trades and your item scraps, and calculates statistics like average sell price.<br><br><span style="color: #FF0000">NOTE:</span> Your history is saved into TamperMonkey data, so if you log in on another computer, your history will not be available there.<br><br>Use the export function to export your history',
                 title: 'Help',
-                text: 'This script keeps track of all your market trades and your item scraps, and calculates statistics like average sell price.<br><br><span style="color: #FF0000">NOTE:</span> Your history is saved into TamperMonkey data, so if you log in on another computer, your history will not be available there.',
                 elements: {},
                 footerButtons: [
                     {
@@ -492,33 +497,139 @@
                 title: 'Export',
                 text: 'Export your history to a csv file',
                 elements: {
+                    exportSortBy: {
+                        title: 'Sort by',
+                        type: 'switch',
+                        description: 'The column to sort by',
+                        options: {
+                            name: 'Item name',
+                            quantity: 'Quantity',
+                            price: 'Price',
+                            action: 'Trade type',
+                            date: 'Date',
+                        },
+                    },
+                    exportSortDirection: {
+                        title: 'Sort direction',
+                        type: 'switch',
+                        description: 'The direction to sort by',
+                        options: {
+                            asc: 'Ascending',
+                            desc: 'Descending',
+                        },
+                    },
+                    exportTimeframe: {
+                        title: 'Export timeframe',
+                        // type: 'timeframeselect',
+                        type: 'switch',
+                        description: 'The timeframe that will be used to export the history.',
+                        options: {
+                            all: 'All time',
+                            last_24hr: 'Last 24 hours',
+                            last_week: 'Last week',
+                            last_month: 'Last month',
+                            last_3_months: 'Last 3 months',
+                            last_6_months: 'Last 6 months',
+                            last_year: 'Last year',
+                            ytd: 'Since january 1st',
+                            mtd: 'Since 1st of month',
+                        }
+                    },
                     download: {
                         type: 'button',
-                        title: 'Download file',
+                        title: 'Download export',
+                        description: 'Starts the exports and downloads the csv file',
                         async action() {
                             await HISTORY.load();
-                            const header = ['item', 'name', 'quantity', 'price', 'action', 'date'].join(',');
-                            const csv = HISTORY.entries.map(entry => {
-                                const itemId = entry.item.split('_')[0];
-                                const item = unsafeWindow.globalData[itemId];
-                                const itemcat = item.itemcat;
-                                const itemname = item.name;
-                                const quantity = realQuantity(entry.quantity, itemcat);
-                                const price = entry.price;
-                                const action = entry.action;
-                                const date = formatDate(new Date(entry.date));
-                                return [entry.item, itemname, quantity, price, action, date].join(',');
-                            }).join('\n');
 
-                            const blob = new Blob([header + '\n' + csv], {type: 'text/csv;charset=utf-8;'})
-                            const url = window.URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.setAttribute('hidden', '');
-                            a.setAttribute('href', url);
-                            a.setAttribute('download', 'df-market-history.csv');
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
+                            const sortBy = SETTINGS.values.exportSortBy;
+                            const sortDirection = SETTINGS.values.exportSortDirection;
+                            const timeframe = SETTINGS.values.exportTimeframe;
+                            let tresholdDate = null;
+
+                            switch (timeframe) {
+                                case 'last_24hr':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setDate(tresholdDate.getDate() - 1);
+                                    break;
+                                case 'last_week':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setDate(tresholdDate.getDate() - 7);
+                                    break;
+                                case 'last_month':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setMonth(tresholdDate.getMonth() - 1);
+                                    break;
+                                case 'last_3_months':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setMonth(tresholdDate.getMonth() - 3);
+                                    break;
+                                case 'last_6_months':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setMonth(tresholdDate.getMonth() - 6);
+                                    break;
+                                case 'last_year':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setFullYear(tresholdDate.getFullYear() - 1);
+                                    break;
+                                case 'ytd':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setMonth(0);
+                                    tresholdDate.setDate(1);
+                                    break;
+                                case 'mtd':
+                                    tresholdDate = new Date();
+                                    tresholdDate.setDate(1);
+                                    break;
+                            }
+
+                            let filteredEntries = HISTORY.entries.filter(entry => {
+                                const entryDate = new Date(entry.date);
+                                if (tresholdDate && entryDate < tresholdDate) {
+                                    return false;
+                                }
+                                return true;
+                            });
+
+                            const sortByKey = sortBy == 'name' ? 'item' : sortBy;
+                            const sortDirectionMultiplier = sortDirection == 'asc' ? 1 : -1;
+                            const sortStrategy = ['price', 'quantity'].includes(sortByKey) ? 'numeric' : 'string';
+
+                            filteredEntries.sort((a, b) => {
+                                const aKey = a[sortByKey];
+                                const bKey = b[sortByKey];
+
+                                if (sortStrategy == 'numeric') {
+                                    return (aKey - bKey) * sortDirectionMultiplier;
+                                }
+
+                                if (sortStrategy == 'string') {
+                                    if (aKey < bKey) {
+                                        return -1 * sortDirectionMultiplier;
+                                    }
+                                    if (aKey > bKey) {
+                                        return 1 * sortDirectionMultiplier;
+                                    }
+                                    return 0;
+                                }
+
+                                throw new Error('Invalid sort strategy: ' + sortStrategy);
+                            });
+
+                            filteredEntries = filteredEntries.map(entry => [
+                                entry.trade_id,
+                                entry.item,
+                                entry.itemname,
+                                entry.quantity,
+                                entry.price,
+                                entry.action,
+                                formatDate(new Date(entry.date)),
+                            ]);
+
+                            // Insert header at top
+                            filteredEntries.unshift(['id', 'item', 'name', 'quantity', 'price', 'action', 'date']);
+
+                            exportToCsv('market_trades_tracker_export.csv', filteredEntries, SETTINGS.values.exportSeperator);
                         }
                     }
                 },
@@ -555,6 +666,15 @@
                             SETTINGS.renderSettingsPrompt('clear_confirm');
                         }
                     },
+                    clearCache: {
+                        type: 'button',
+                        title: 'Clear cache',
+                        description: 'Clears the cache, which will cause the script to recalculate all statistics',
+                        action() {
+                            HISTORY.resetCache();
+                            alert('Cache cleared');
+                        }
+                    },
                 },
                 footerButtons: [
                     {
@@ -580,7 +700,7 @@
             clear_confirm: {
                 class: 'warning',
                 title: 'Clear history',
-                text: 'Are you sure you want to clear all history?<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
+                text: 'Are you really sure you want to clear ALL history?<br><br>You can also delete single entries from the history tab in marketplace.<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
                 elements: {},
                 footerButtons: [
                     {
@@ -596,6 +716,7 @@
                         label: 'yes',
                         async action() {
                             await HISTORY.clearEntries();
+                            HISTORY.resetCache();
                             SETTINGS.closePrompt();
                         },
                         style: {
@@ -606,11 +727,12 @@
             },
             credits: {
                 title: 'Credits',
-                text: 'This script was made by Runonstof. If you have any questions or suggestions, feel free to contact me on Discord: runon',
+                text: 'This script was made by <span style="color: #FF0000">Runonstof</span>. If you have any questions or suggestions, feel free to contact me on Discord: <span style="color: #FF0000">runon</span>',
                 elements: {
                     donate: {
                         type: 'button',
                         title: 'Donate',
+                        description: 'Redirects to my profile page, where you can donate anything if you want to support me.',
                         action() {
                             window.location.href = '/onlinezombiemmo/index.php?action=profile;u=12925065';
                         }
@@ -657,12 +779,12 @@
                         description: 'When selling an item, the price will be automatically filled in with the average sell price in the set timeframe.',
                     },
                     countPendingTrades: {
-                        title: 'Calculate pending trades',
+                        title: 'Calculate with pending',
                         type: 'checkbox',
                         description: 'When calculating statistics, pending trades will be taken into account.',
                     },
                     countScraps: {
-                        title: 'Calculate scraps',
+                        title: 'Calculate with scraps',
                         type: 'checkbox',
                         description: 'When calculating statistics, scraps will be taken into account.',
                     },
@@ -717,6 +839,10 @@
             // If true, the script will take trades that are still pending into account when calculating statistics
             countPendingTrades: true,
             countScraps: true,
+            exportSortBy: 'date',
+            exportSortDirection: 'asc',
+            exportTimeframe: 'all',
+            exportSeperator: ';',
         },
         async reset() {
             await GM.setValue('SETTINGS_values', {});
@@ -748,6 +874,8 @@
             unsafeWindow.prompt.innerHTML = "";
             unsafeWindow.prompt.style.height = "";
             pageLock = false;
+			unsafeWindow.prompt.classList.remove("warning");
+			unsafeWindow.prompt.classList.remove("redhighlight");
         },
         renderSettingsPrompt(page = 'main') {
             pageLock = true;
@@ -761,7 +889,7 @@
                 unsafeWindow.prompt.classList.add(pageInfo.class);
             }
 
-        	unsafeWindow.prompt.style.height = "250px";
+        	unsafeWindow.prompt.style.height = "280px";
             unsafeWindow.prompt.innerHTML = pageInfo.title ? '<div style="text-align: center; text-decoration: underline">' + pageInfo.title + '</div>' : '';
             if (pageInfo.text) {
                 unsafeWindow.prompt.innerHTML += '<div>' + pageInfo.text + '</div>';
@@ -803,6 +931,10 @@
                 descriptionElement.parentNode.removeChild(descriptionElement);
             }
 
+            if (!descriptionText) {
+                return;
+            }
+
             const description = document.createElement('div');
             description.id = 'historySettingsDescription';
             description.innerHTML = descriptionText;
@@ -835,6 +967,9 @@
                             checkbox.addEventListener('mouseover', function () {
                                 self._renderDescription(holder, setting.description);
                             });
+                            checkbox.addEventListener('mouseout', function () {
+                                self._renderDescription(holder, null);
+                            });
                         }
                         buttonHolder.appendChild(checkbox);
                         holder.appendChild(buttonHolder);
@@ -856,6 +991,9 @@
                             switcher.addEventListener('mouseover', function () {
                                 self._renderDescription(holder, setting.description);
                             });
+                            switcher.addEventListener('mouseout', function () {
+                                self._renderDescription(holder, null);
+                            });
                         }
                         buttonHolder.appendChild(switcher);
                         holder.appendChild(buttonHolder);
@@ -868,6 +1006,9 @@
                         if (setting.description) {
                             button.addEventListener('mouseover', function () {
                                 self._renderDescription(holder, setting.description);
+                            });
+                            button.addEventListener('mouseout', function () {
+                                self._renderDescription(holder, null);
                             });
                         }
                         buttonHolder.appendChild(button);
@@ -931,8 +1072,14 @@
 
     
     function maxStack(itemId) {
+        itemId = itemId.split('_')[0];
         const itemcat = unsafeWindow.globalData[itemId].itemcat;
         if (itemcat == 'armour' || itemcat == 'weapon') {
+            return 1;
+        }
+
+        // TODO: check if doesnt cause unwanted side effects
+        if (itemcat == 'credits') {
             return 1;
         }
 
@@ -1046,6 +1193,117 @@
         return date.toISOString().split('.')[0].replace('T', ' ');
     }
 
+    function historyAction(e) {
+
+        var question = false;
+        var action;
+        var extraData = {};
+        switch(e.target.dataset.action) {
+            case 'switchHistory':
+                unsafeWindow.prompt.innerHTML = "<div style='text-align: center'>Loading, please wait...</div>";
+                unsafeWindow.prompt.parentNode.style.display = "block";
+                historyScreen = e.target.dataset.page;
+                loadMarket();
+                return;
+                break;
+        }
+    }
+
+    function debouncedItemSearch() {
+        const searchFn = function (query) {
+            query = query.toLowerCase().replace(/[\.\s]/g, '').trim();
+            if (!query.length) {
+                return [];
+            }
+            return SEARCHABLE_ITEMS
+                .filter(itemId => {
+                    const useItemId = itemId.split('_')[0];
+                    const itemName = unsafeWindow.itemNamer(itemId, maxStack(useItemId))
+                        .toLowerCase()
+                        .replace(/[\.\s]/g, '');
+                    return itemName.includes(query) || itemId.includes(query);
+                })
+                // .map(item => ({item, ...unsafeWindow.globalData[item.split('_')[0]]}))
+                .map(item => {
+                    const itemId = item.split('_')[0];
+                    return {
+                        item,
+                        name: itemNamer(item, maxStack(itemId)),
+                    }
+                })
+                .sort((a, b) => {
+                    const aName = a.name?.toLowerCase();
+                    const bName = b.name?.toLowerCase();
+                    return aName.localeCompare(bName);
+                });
+        };
+        
+        let timeout;
+        return function (query, callback) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                callback(searchFn(query));
+            }, 400);
+        };
+    }
+
+    // To be called to check if results box should be hidden
+    function onDocumentClick(e) {
+        const historyItemSearchResultBox = document.getElementById('historyItemSearchResultBox');
+        if (!historyItemSearchResultBox || (e.target.closest('#historyItemSearchResultBox') || e.target.closest('#historySearchArea input'))) {
+            return;
+        }
+        historyItemSearchResultBox.classList.add('hidden');
+    }
+
+    unsafeWindow.addEventListener('click', onDocumentClick);
+
+    // @see https://stackoverflow.com/a/24922761
+    function exportToCsv(filename, rows, seperator) {
+        var processRow = function (row) {
+            var finalVal = '';
+            for (var j = 0; j < row.length; j++) {
+                try {
+                    var innerValue = row[j] === null ? '' : row[j].toString();
+                } catch(exc) {
+                    debugger;
+                }
+                if (row[j] instanceof Date) {
+                    innerValue = row[j].toLocaleString();
+                };
+                var result = innerValue.replace(/"/g, '""');
+                if (result.search(/("|,|\n|\s)/g) >= 0)
+                    result = '"' + result + '"';
+                if (j > 0)
+                    finalVal += seperator;
+                finalVal += result;
+            }
+            return finalVal + '\n';
+        };
+    
+        var csvFile = '';
+        for (var i = 0; i < rows.length; i++) {
+            csvFile += processRow(rows[i]);
+        }
+    
+        var blob = new Blob([csvFile], { type: 'text/csv;charset=utf-8;' });
+        if (navigator.msSaveBlob) { // IE 10+
+            navigator.msSaveBlob(blob, filename);
+        } else {
+            var link = document.createElement("a");
+            if (link.download !== undefined) { // feature detection
+                // Browsers that support HTML5 download attribute
+                var url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", filename);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        }
+    }
+
     /******************************************************
      * Styles
      ******************************************************/
@@ -1063,15 +1321,45 @@
     });
 
     GM_addStyle_object('#marketplace #historyItemDisplay', {
-        top: '230px',
+        top: '104px',
         bottom: '110px',
     });
 
     GM_addStyle_object('#marketplace #historySearchArea', {
         position: 'absolute',
-        top: '60px',
-        left: '80px',
-        right: '80px',
+        top: '100px',
+        left: '20px',
+        // right: '80px',
+        height: '35px',
+        width: '205px',
+        padding: '8px',
+        border: '1px #990000 solid',
+        textAlign: 'left',
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        
+        '$ & #historyItemSearchResultBox': {
+            position: 'absolute',
+            // top: '184px',
+            width: '250px',
+            maxHeight: '300px',
+            overflowY: 'auto',
+            padding: '4px',
+            border: '1px #990000 solid',
+            textAlign: 'left',
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            zIndex: '100',
+
+            '$ &.hidden': {
+                display: 'none',
+            },
+        },
+    });
+    GM_addStyle_object('#marketplace #historyFilterArea', {
+        position: 'absolute',
+        top: '100px',
+        left: '250px',
+        right: '20px',
+        height: '35px',
         padding: '8px',
         border: '1px #990000 solid',
         textAlign: 'left',
@@ -1080,14 +1368,15 @@
 
     GM_addStyle_object('#marketplace #historyInfoBox', {
         position: 'absolute',
-        top: '120px',
+        top: '160px',
         left: '20px',
         right: '20px',
+        bottom: '110px',
         padding: '8px',
         border: '1px #990000 solid',
-        height: '70px',
         textAlign: 'left',
         backgroundColor: 'rgba(0,0,0,0.8)',
+
         '$ & .historyDetailsContainer': {
             fontSize: '14px',
             width: '100%',
@@ -1099,8 +1388,8 @@
                 left: '50%',
                 transform: 'translateY(-50%) translateX(-50%)',
             }
-        }
-    
+        },
+
     });
 
     GM_addStyle_object('#marketplace #historyItemDisplay .fakeItem', {
@@ -1136,6 +1425,17 @@
         },
     });
 
+    GM_addStyle_object('#marketplace #selectHistoryCategory', {
+        position: 'absolute',
+        width: '100%',
+        top: '70px',
+        fontSize: '12pt',
+
+        '$ & button': {
+            width: '120px',
+        },
+    });
+
     
     /******************************************************
      * DF Function Overrides
@@ -1164,144 +1464,244 @@
             historyBtn.innerText = 'history';
             historyBtn.addEventListener("click", marketAction);
             pageNavigation.appendChild(historyBtn);
+
     
             switch (unsafeWindow.marketScreen) {
                 case 'history':
                     historyBtn.disabled = true;
                     pageLogo.textContent = "Market History";
-    
+
+                    const historyNavigation = document.createElement('div');
+                    historyNavigation.id = 'selectHistoryCategory';
+                    pageNavigation.after(historyNavigation);
+
+                    const listBtn = document.createElement('button');
+                    listBtn.setAttribute('data-action', 'switchHistory');
+                    listBtn.setAttribute('data-page', 'list');
+                    listBtn.setAttribute('id', 'historyList');
+                    listBtn.innerText = 'list';
+                    listBtn.addEventListener("click", historyAction);
                     
-                    const searchBox = document.createElement("div");
-                    searchBox.id = "historySearchArea";
-                    searchBox.innerHTML = `
-                        <div style='text-align: left; width: 185px; display: inline-block;'>
-                            Search for:<br /><input id='historySearchField' type='text' name='historySearch' />
-                        </div>
-                    `;
-                    // categorySelect += "<div style='display: inline-block; width: 260px;'>In Category:<br/><div id='categoryChoice' data-catname=''><span id='cat'>Everything</span><span id='dog' style='float: right;'>&#9668;</span></div>";
-                    // <div class="historyDetailsText">Click on a trade to see more info</div>
-                    const historyInfoBox = document.createElement("div");
-                    historyInfoBox.id = "historyInfoBox";
-                    historyInfoBox.innerHTML = `
-                        <div style='text-align: left; width: 100%; display: inline-block;'>
-                            <div class="historyDetailsContainer">
-                                <div class="historyTradeImage"></div>
-                            </div>
-                        </div>
-                    `;
-                    
-                    const boxLabels = document.createElement("div");
-                    boxLabels.id = "historyLabels";
-                    boxLabels.innerHTML = `
-                        <span>Item Name</span>
-                        <span style='position: absolute; left: 208px; width: 80px; width: max-content;'>Type</span>
-                        <span style='position: absolute; left: 320px; width: max-content;'>Price</span>
-                        <span style='position: absolute; left: 480px; width: 70px; width: max-content;'>Datetime</span>
-                    `;
-                    boxLabels.classList.add("opElem");
-                    boxLabels.style.top = "216px";
-                    boxLabels.style.left = "26px";
+                    const statsBtn = document.createElement('button');
+                    statsBtn.setAttribute('data-action', 'switchHistory');
+                    statsBtn.setAttribute('data-page', 'stats');
+                    statsBtn.setAttribute('id', 'historyStats');
+                    statsBtn.innerText = 'statistics';
+                    statsBtn.addEventListener("click", historyAction);
+
+
+                    historyNavigation.appendChild(listBtn);
+                    historyNavigation.appendChild(statsBtn);
+
+                    // Add history navbar below
     
-                    const historyItemDisplay = document.createElement("div");
-                    historyItemDisplay.id = "historyItemDisplay";
-                    historyItemDisplay.classList.add("marketDataHolder");
-                    historyItemDisplay.setAttribute('data-offset', 0);
-                    historyItemDisplay.setAttribute('data-per-page', 10);
-                    const renderHistoryItems = function () {
-                        const offset = parseInt(historyItemDisplay.getAttribute('data-offset'));
-                        const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
-
-                        const entryCount = HISTORY.entries.length;
-
-                        if (offset >= entryCount) {
-                            return false;
-                        }
-                        
-                        for(let i = 0; i < perPage; i++) {
-                            const entryIndex = entryCount - offset - i - 1;
-                            const entry = HISTORY.entries[entryIndex] || null;
-                            // const entryIndex = i + offset;
-                            // const entry = HISTORY.entries[entryIndex] || null;
-                            if (!entry) {
-                                continue;
-                            }
-                            const isPending = HISTORY.cache.pending_trade_ids.includes(entry.trade_id);
+                    switch (unsafeWindow.historyScreen) {
+                        case 'list':
+                            listBtn.disabled = true;
                             
-                            // if (isPending) {
-                            //     continue;
-                            // }
-
-                            // <div class="fakeItem" data-type="avalanchemg14_stats777" data-quantity="1" data-price="53000000"><div class="itemName cashhack credits" data-cash="Avalanche MG14">Avalanche MG14</div> <span style="color: #c0c0c0;">(AC)</span><div class="tradeZone">Outpost</div><div class="seller">ScarHK</div><div class="salePrice" style="color: red;">$53,000,000</div><button disabled="" data-action="buyItem" data-item-location="1" data-buynum="350533865">buy</button></div>
-                            const row = document.createElement("div");
-                            row.classList.add("fakeItem");
-                            if (isPending) {
-                                row.classList.add("pending");
-                            }
-                            row.setAttribute("data-type", entry.item);
-                            row.setAttribute("data-quantity", entry.quantity);
-                            row.setAttribute("data-price", entry.price);
-                            row.setAttribute("data-trade-id", entry.trade_id);
-
-                            let mcSpan = calcMCTag(entry.item, false, "span", "");
-                            
-                            row.innerHTML = `
-                                <div class="itemName cashhack credits" data-cash="${entry.itemname}">${entry.itemname}</div>
-                                ${mcSpan}
-                                <div class="tradeType">${entry.action}</div>
-                                <div class="salePrice">$${entry.price}</div>
-                                <div class="saleDate">${formatDate(new Date(entry.date))}</div>
+                            const boxLabels = document.createElement("div");
+                            boxLabels.id = "historyLabels";
+                            boxLabels.innerHTML = `
+                                <span>Item Name</span>
+                                <span style='position: absolute; left: 208px; width: 80px; width: max-content;'>Type</span>
+                                <span style='position: absolute; left: 320px; width: max-content;'>Price</span>
+                                <span style='position: absolute; left: 480px; width: 70px; width: max-content;'>Datetime</span>
                             `;
-                            // row.innerHTML = "<div class='itemName cashhack credits' data-cash='" + entry.itemname + "'>" + entry.itemname + "</div><div class='tradeZone'>" + entry.trade_zone + "</div><div class='seller'>" + entry.member_name + "</div><div class='salePrice' style='color: red;'>$" + entry.price + "</div>";
-                            historyItemDisplay.appendChild(row);
-                        }
-
-                        return true;
-                    };
-                    
-                    const onHistoryScroll = function () {
-                        const fullScrollHeight = historyItemDisplay.scrollHeight;
-                        const scrolledHeight = historyItemDisplay.scrollTop + historyItemDisplay.clientHeight;
-                        const diff = fullScrollHeight - scrolledHeight;
-
-                        if (diff > 50) {
-                            return;
-                        }
-
-                        const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
-                        historyItemDisplay.removeEventListener('scroll', onHistoryScroll);
-                        historyItemDisplay.setAttribute('data-offset', parseInt(historyItemDisplay.getAttribute('data-offset')) + perPage);
-                        const hasMore = renderHistoryItems();
-                        if (hasMore) {
+                            boxLabels.classList.add("opElem");
+                            boxLabels.style.top = "90px";
+                            boxLabels.style.left = "26px";
+            
+                            const historyItemDisplay = document.createElement("div");
+                            historyItemDisplay.id = "historyItemDisplay";
+                            historyItemDisplay.classList.add("marketDataHolder");
+                            historyItemDisplay.setAttribute('data-offset', 0);
+                            historyItemDisplay.setAttribute('data-per-page', 10);
+                            const renderHistoryItems = function () {
+                                const offset = parseInt(historyItemDisplay.getAttribute('data-offset'));
+                                const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
+        
+                                const entryCount = HISTORY.entries.length;
+        
+                                if (offset >= entryCount) {
+                                    return false;
+                                }
+                                
+                                for(let i = 0; i < perPage; i++) {
+                                    const entryIndex = entryCount - offset - i - 1;
+                                    const entry = HISTORY.entries[entryIndex] || null;
+                                    // const entryIndex = i + offset;
+                                    // const entry = HISTORY.entries[entryIndex] || null;
+                                    if (!entry) {
+                                        continue;
+                                    }
+                                    const isPending = HISTORY.cache.pending_trade_ids.includes(entry.trade_id);
+                                    
+                                    // if (isPending) {
+                                    //     continue;
+                                    // }
+        
+                                    // <div class="fakeItem" data-type="avalanchemg14_stats777" data-quantity="1" data-price="53000000"><div class="itemName cashhack credits" data-cash="Avalanche MG14">Avalanche MG14</div> <span style="color: #c0c0c0;">(AC)</span><div class="tradeZone">Outpost</div><div class="seller">ScarHK</div><div class="salePrice" style="color: red;">$53,000,000</div><button disabled="" data-action="buyItem" data-item-location="1" data-buynum="350533865">buy</button></div>
+                                    const row = document.createElement("div");
+                                    row.classList.add("fakeItem");
+                                    if (isPending) {
+                                        row.classList.add("pending");
+                                    }
+                                    row.setAttribute("data-type", entry.item);
+                                    row.setAttribute("data-quantity", entry.quantity);
+                                    row.setAttribute("data-price", entry.price);
+                                    row.setAttribute("data-trade-id", entry.trade_id);
+        
+                                    let afterName = calcMCTag(entry.item, false, "span", "") || '';
+        
+                                    const itemId = entry.item.split('_')[0];
+                                    const itemCat = getItemType(unsafeWindow.globalData[itemId]);
+                                    if (itemCat == 'ammo') {
+                                        afterName += ' <span>(' + entry.quantity + ')</span>';
+                                    }
+                                    
+                                    row.innerHTML = `
+                                        <div class="itemName cashhack credits" data-cash="${entry.itemname}">${entry.itemname}</div>
+                                        ${afterName}
+                                        <div class="tradeType">${entry.action}</div>
+                                        <div class="salePrice">$${entry.price}</div>
+                                        <div class="saleDate">${formatDate(new Date(entry.date))}</div>
+                                    `;
+                                    // row.innerHTML = "<div class='itemName cashhack credits' data-cash='" + entry.itemname + "'>" + entry.itemname + "</div><div class='tradeZone'>" + entry.trade_zone + "</div><div class='seller'>" + entry.member_name + "</div><div class='salePrice' style='color: red;'>$" + entry.price + "</div>";
+                                    historyItemDisplay.appendChild(row);
+                                }
+        
+                                return true;
+                            };
+                            
+                            const onHistoryScroll = function () {
+                                const fullScrollHeight = historyItemDisplay.scrollHeight;
+                                const scrolledHeight = historyItemDisplay.scrollTop + historyItemDisplay.clientHeight;
+                                const diff = fullScrollHeight - scrolledHeight;
+        
+                                if (diff > 50) {
+                                    return;
+                                }
+        
+                                const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
+                                historyItemDisplay.removeEventListener('scroll', onHistoryScroll);
+                                historyItemDisplay.setAttribute('data-offset', parseInt(historyItemDisplay.getAttribute('data-offset')) + perPage);
+                                const hasMore = renderHistoryItems();
+                                if (hasMore) {
+                                    historyItemDisplay.addEventListener('scroll', onHistoryScroll);
+                                }
+                            };
+        
+                            marketHolder.appendChild(historyItemDisplay);
+                            marketHolder.appendChild(boxLabels);
+            
+                            await HISTORY.load();
+                            // retrieve current user's pending trades
+                            await new Promise(resolve => {
+                                var dataArray = {};
+        
+                                dataArray["pagetime"] = userVars["pagetime"];
+                                dataArray["tradezone"] = "";
+                                dataArray["searchname"] = "";
+                                dataArray["searchtype"] = "sellinglist";
+                                dataArray["search"] = "trades";
+                                dataArray["memID"] = userVars["userID"];
+                                dataArray["category"] = "";
+                                dataArray["profession"] = "";
+                                
+                                // Execute webCall
+                                webCall("trade_search", dataArray, resolve, true);
+                                // Cache will be updated by webCall hook somewhere else in the code
+                            });
+                            
+                            renderHistoryItems();
                             historyItemDisplay.addEventListener('scroll', onHistoryScroll);
-                        }
-                    };
+                            break;
+                        case 'stats':
+                            statsBtn.disabled = true;
+                            const searchBox = document.createElement("div");
+                            searchBox.id = "historySearchArea";
+                            searchBox.innerHTML = `
+                                <div style='text-align: left; width: 185px; display: inline-block;'>
+                                    Add item:<br /><input id='historySearchField' type='text' name='historySearch' />
+                                </div>
+                            `;
+                            const filterBox = document.createElement("div");
+                            filterBox.id = "historyFilterArea";
+                            // Filter box shows items that are added to search on
+                            // But also a date range select
+                            // filterBox.innerHTML =
 
-                    marketHolder.appendChild(historyItemDisplay);
-                    marketHolder.appendChild(boxLabels);
-                    marketHolder.appendChild(searchBox);
-                    marketHolder.appendChild(historyInfoBox);
-    
-                    await HISTORY.load();
-                    // retrieve current user's pending trades
-                    await new Promise(resolve => {
-                        var dataArray = {};
+                            const searchInput = searchBox.querySelector('#historySearchField');
+                            // categorySelect += "<div style='display: inline-block; width: 260px;'>In Category:<br/><div id='categoryChoice' data-catname=''><span id='cat'>Everything</span><span id='dog' style='float: right;'>&#9668;</span></div>";
+                            // <div class="historyDetailsText">Click on a trade to see more info</div>
+                            const historyInfoBox = document.createElement("div");
+                            historyInfoBox.id = "historyInfoBox";
+                            historyInfoBox.innerHTML = `
+                                <div style='text-align: left; width: 100%; display: inline-block;'>
+                                    <div class="historyDetailsContainer">
+                                        <div class="historyTradeImage"></div>
+                                    </div>
+                                </div>
+                            `;
 
-                        dataArray["pagetime"] = userVars["pagetime"];
-                        dataArray["tradezone"] = "";
-                        dataArray["searchname"] = "";
-                        dataArray["searchtype"] = "sellinglist";
-                        dataArray["search"] = "trades";
-                        dataArray["memID"] = userVars["userID"];
-                        dataArray["category"] = "";
-                        dataArray["profession"] = "";
-                        
-                        // Execute webCall
-                        webCall("trade_search", dataArray, resolve, true);
-                        // Cache will be updated by webCall hook somewhere else in the code
-                    });
-                    
-                    renderHistoryItems();
-                    historyItemDisplay.addEventListener('scroll', onHistoryScroll);
+                            const searchResultBox = document.createElement("div");
+                            searchResultBox.id = "historyItemSearchResultBox";
+                            searchResultBox.classList.add("hidden");
+                            
+                            searchBox.appendChild(searchResultBox);
+
+                            marketHolder.appendChild(searchBox);
+                            marketHolder.appendChild(filterBox);
+                            marketHolder.appendChild(historyInfoBox);
+
+                            const searchFn = debouncedItemSearch();
+
+                            searchInput.addEventListener('input', function () {
+                                searchFn(this.value, function (results) {
+                                    searchResultBox.innerHTML = '';
+                                    for(const result of results) {
+                                        // const resultRow = document.createElement('div');
+
+                                        const resultButton = document.createElement('button');
+                                        resultButton.innerText = result.name;
+                                        resultButton.style.width = '100%';
+                                        resultButton.style.textAlign = 'left';
+                                        resultButton.classList.add("fakeItem");
+                                        resultButton.setAttribute("data-type", result.item);
+                                        resultButton.setAttribute("data-quantity", maxStack(result.item));
+            
+                                        resultButton.addEventListener('click', function () {
+                                            // searchInput.value = result.name;
+                                            // searchResultBox.innerHTML = '';
+                                        });
+                                        // resultRow.appendChild(resultButton);
+                                        // searchResultBox.appendChild(resultRow);
+                                        searchResultBox.appendChild(resultButton);
+                                    }
+
+                                    if (!results.length) {
+                                        searchResultBox.classList.add('hidden');
+                                    } else {
+                                        searchResultBox.classList.remove('hidden');
+                                    }
+                                });
+                            });
+                            searchInput.addEventListener('blur', function (e) {
+                                // Check if not focused on result box
+                                if (e.relatedTarget && e.relatedTarget.parentNode.id == 'historyItemSearchResultBox') {
+                                    return;
+                                }
+
+                                searchResultBox.classList.add('hidden');
+                            });
+                            searchInput.addEventListener('focus', function () {
+                                // If result box has results, show it
+                                if (searchResultBox.children.length) {
+                                    searchResultBox.classList.remove('hidden');
+                                }
+                            });
+                            break;
+                    }
                     
                     promptEnd();
                     break;
@@ -1463,7 +1863,7 @@
             }
 
             const itemId = target.dataset.type.split('_')[0];
-            const itemData = globalData[itemId] || null;
+            // const itemData = globalData[itemId] || null;
             
             const container = document.createElement("div");
             // container.className = "itemData historyInfoContainer";
@@ -1532,14 +1932,14 @@
             dataObj[key.replace(/^df_inv\d+_/, '')] = response.dataObj[key];
         }
         
-        const itemId = dataObj.type.split('_')[0];
+        // const itemId = dataObj.type.split('_')[0];
 
         const entry = {
             trade_id: request.params.buynum,
             action: 'buy',
             price: request.params.expected_itemprice,
             item: dataObj.type,
-            itemname: globalData[itemId].name,
+            itemname: unsafeWindow.itemNamer(dataObj.type, dataObj.quantity),
             quantity: dataObj.quantity, 
         };
 
@@ -1563,11 +1963,11 @@
         const itemId = itemTypeId.split('_')[0];
 
         const entry = {
-            trade_id: request.params.hash,
+            trade_id: hash(objectJoin(request.params)),
             action: 'scrap',
             price: request.params.price,
             item: request.params.expected_itemtype,
-            itemname: globalData[itemId].name,
+            itemname: unsafeWindow.itemNamer(itemTypeId, quantity),
             quantity,
         };
 
@@ -1607,14 +2007,12 @@
     
     
     /******************************************************
-     * Await Page Init
+     * Await Page Initialization
      ******************************************************/
 
     // A promise that resolves when document is fully loaded and globalData is filled with stackables
     // This is because DeadFrontier does a request to stackables.json, which is needed for the max stack of items
     // Only after this request is done, globalData will contain ammo with a max_quantity
-    //
-    // Noobs use setTimeout, pros use promises
     await new Promise(resolve => {
         // This is the original function that is called when the stackables.json request is done
         const origUpdateIntoArr = unsafeWindow.updateIntoArr;
@@ -1632,6 +2030,22 @@
             resolve();
         }
     });
+
+    /******************************************************
+     * Script Initialization
+     ******************************************************/
+
+    SEARCHABLE_ITEMS = Object.keys(unsafeWindow.globalData)
+        .filter(itemId => !['brokenitem', 'undefined'].includes(itemId) && unsafeWindow.globalData[itemId].no_transfer != '1');
+
+    SEARCHABLE_ITEMS.forEach(itemId => {
+            const item = unsafeWindow.globalData[itemId];
+            if (!item.needcook || item.needcook != '1') {
+                return;
+            }
+
+            SEARCHABLE_ITEMS.push(itemId + '_cooked');
+        });
     
     // Load History
     await HISTORY.load();
@@ -1675,7 +2089,7 @@
 
     var historySettingsButton = document.createElement("button");
     historySettingsButton.classList.add("opElem");
-    historySettingsButton.style.left = "400px";
+    historySettingsButton.style.left = page == 35 ? "200px" : "400px";
     historySettingsButton.style.bottom = "86px";
     historySettingsButton.textContent = "History Menu";
     inventoryHolder.appendChild(historySettingsButton);
