@@ -19,9 +19,9 @@
      ******************************************************/
 
     const searchParams = new URLSearchParams(window.location.search);
-
-    // If is not on the market page, stop script
-    if (searchParams.get('page') != 35) {
+    const page = parseInt(searchParams.get('page'));
+    // If is not on the market page or yard page, stop script
+    if (![35, 24].includes(page)) {
         return;
     }
 
@@ -43,17 +43,9 @@
     const HISTORY = {
         entries: [],
         
-        // timestamp of last load
-        // It is common to have multiple tabs open of dead frontier
-        // By checking for lastLoadedAt, we prevent overriding data, and thus losing trades from other tabs
-        lastLoadAt: 0,
-        lastSaveAt: 0,
-        lastTouchedAt: 0,
-        
         // Cached values, to prevent having to loop through all entries every time
         // Causing performance to improve
         cache: {
-            initialized: false,
             trade_id: {}, // trades indexed by trade_id
             item_id: {}, // trades indexed by item_id
 
@@ -70,8 +62,12 @@
 
             item_id__sold: {}, // trades indexed by trade_id
             item_id__bought: {}, // trades indexed by trade_id
+            item_id__scrapped: {}, // trades indexed by trade_id
 
             pending_trade_ids: [], // trade_ids of pending trades
+        },
+        storageKey() {
+            return 'HISTORY_entries_' + unsafeWindow.userVars.userID;
         },
         resetCache() {
             const entries = this.entries;
@@ -127,7 +123,7 @@
 
             await this.load();
             this.entries.push(entry);
-            await GM.setValue('HISTORY_entries', this.entries);
+            await GM.setValue(this.storageKey(), this.entries);
 
             this.cache.trade_id[entry.trade_id] = entry;
 
@@ -167,15 +163,13 @@
             await this.load();
             const index = this.entries.findIndex(entry => entry.trade_id === tradeId);
             if (index == -1) {
-                // console.log('Trade not found: ' + tradeId);
                 return false;
             }
-            // console.log('trade cancel: ' + tradeId)
 
             const entry = this.entries[index];
 
             this.entries.splice(index, 1);
-            await GM.setValue('HISTORY_entries', this.entries);
+            await GM.setValue(this.storageKey(), this.entries);
 
             // Update cache
             delete this.cache.trade_id[tradeId];
@@ -350,7 +344,7 @@
 
         // Called during debugging
         async forceSave() {
-            await GM.setValue('HISTORY_entries', this.entries);
+            await GM.setValue(this.storageKey(), this.entries);
         },
         // Called during debugging
         async clearEntries() {
@@ -358,12 +352,8 @@
             await this.forceSave();
         },
 
-        hasPendingChanges() {
-            return this.lastTouchedAt > this.lastLoadAt;
-        },
         async load() {
-            this.entries = await GM.getValue('HISTORY_entries', []);
-            this.lastLoadAt = Date.now();
+            this.entries = await GM.getValue(this.storageKey(), []);
         },
 
         /**
@@ -421,57 +411,471 @@
 
     const SETTINGS = {
         ui: {
-            hoverEnabled: {
-                title: 'Show sell/buy statistics on item hover',
-                type: 'checkbox',
+            main: {
+                title: 'History Menu',
+                text: 'Welcome to History Help and Settings!',
+                elements: {
+                    settings: {
+                        type: 'button',
+                        title: 'Settings',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('settings');
+                        }
+                    },
+                    help: {
+                        type: 'button',
+                        title: 'Help',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('help');
+                        }
+                    },
+                    export: {
+                        type: 'button',
+                        title: 'Export',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('export');
+                        }
+                    },
+                    actions: {
+                        type: 'button',
+                        title: 'Actions',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('actions');
+                        }
+                    },
+                    credits: {
+                        type: 'button',
+                        title: 'Credits',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('credits');
+                        }
+                    },
+                },
+                footerButtons: [
+                    {
+                        label: 'close',
+                        action() {
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ],
             },
-            statisticsTimeframe: {
-                title: 'Statistics timeframe',
-                type: 'timeframeselect',
-                description: 'The timeframe for which the statistics will be shown on item hover.',
-                units: {
-                    all: 'All time',
-                    days: 'Days',
-                    months: 'Months',
-                    years: 'Years',
-                    ytd: 'Year to date',
-                    mtd: 'Month to date',
-                }
+            help: {
+                title: 'Help',
+                text: 'This script keeps track of all your market trades and your item scraps, and calculates statistics like average sell price.<br><br><span style="color: #FF0000">NOTE:</span> Your history is saved into TamperMonkey data, so if you log in on another computer, your history will not be available there.',
+                elements: {},
+                footerButtons: [
+                    {
+                        label: 'back',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('main');
+                        },
+                        style: {
+                            left: '12px',
+                        }
+                    },
+                    {
+                        label: 'close',
+                        action() {
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ],
             },
-            autoFillBreakEvenPrice: {
-                title: 'Auto fill break even price',
-                type: 'checkbox',
-                description: 'When selling an item, the price will be automatically filled in with the average buy price of the item of the configured timeframe.',
+            export: {
+                title: 'Export',
+                text: 'Export your history to a csv file',
+                elements: {
+                    download: {
+                        type: 'button',
+                        title: 'Download file',
+                        async action() {
+                            await HISTORY.load();
+                            const header = ['item', 'name', 'quantity', 'price', 'action', 'date'].join(',');
+                            const csv = HISTORY.entries.map(entry => {
+                                const itemId = entry.item.split('_')[0];
+                                const item = unsafeWindow.globalData[itemId];
+                                const itemcat = item.itemcat;
+                                const itemname = item.name;
+                                const quantity = realQuantity(entry.quantity, itemcat);
+                                const price = entry.price;
+                                const action = entry.action;
+                                const date = formatDate(new Date(entry.date));
+                                return [entry.item, itemname, quantity, price, action, date].join(',');
+                            }).join('\n');
+
+                            const blob = new Blob([header + '\n' + csv], {type: 'text/csv;charset=utf-8;'})
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.setAttribute('hidden', '');
+                            a.setAttribute('href', url);
+                            a.setAttribute('download', 'df-market-history.csv');
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                        }
+                    }
+                },
+                footerButtons: [
+                    {
+                        label: 'back',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('main');
+                        },
+                        style: {
+                            left: '12px',
+                        }
+                    },
+                    {
+                        label: 'close',
+                        action() {
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ],
             },
-            countPendingTrades: {
-                title: 'Count pending trades',
-                type: 'checkbox',
-                description: 'When calculating statistics, pending trades will be taken into account.',
+            actions: {
+                title: 'Actions',
+                text: '',
+                elements: {
+                    clear: {
+                        type: 'button',
+                        title: 'Clear all history',
+                        description: 'Forgets all market sell/buy/scrap history<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('clear_confirm');
+                        }
+                    },
+                },
+                footerButtons: [
+                    {
+                        label: 'back',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('main');
+                        },
+                        style: {
+                            left: '12px',
+                        }
+                    },
+                    {
+                        label: 'close',
+                        action() {
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ],
+            },
+            clear_confirm: {
+                class: 'warning',
+                title: 'Clear history',
+                text: 'Are you sure you want to clear all history?<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
+                elements: {},
+                footerButtons: [
+                    {
+                        label: 'no',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('actions');
+                        },
+                        style: {
+                            left: '12px',
+                        }
+                    },
+                    {
+                        label: 'yes',
+                        async action() {
+                            await HISTORY.clearEntries();
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ]
+            },
+            credits: {
+                title: 'Credits',
+                text: 'This script was made by Runonstof. If you have any questions or suggestions, feel free to contact me on Discord: runon',
+                elements: {
+                    donate: {
+                        type: 'button',
+                        title: 'Donate',
+                        action() {
+                            window.location.href = '/onlinezombiemmo/index.php?action=profile;u=12925065';
+                        }
+                    }
+                },
+                footerButtons: [
+                    {
+                        label: 'back',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('main');
+                        },
+                        style: {
+                            left: '12px',
+                        }
+                    },
+                    {
+                        label: 'close',
+                        action() {
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ],
+            },
+            settings: {
+                title: 'Settings',
+                text: '',
+                elements: {
+                    hoverAvgPriceEnabled: {
+                        title: 'Avg price hover enabled',
+                        description: 'Show average sell/buy price and profit/loss in set timeframe on item hover',
+                        type: 'checkbox',
+                    },
+                    hoverLastPriceEnabled: {
+                        title: 'Last price hover enabled',
+                        description: 'Show last sell/buy price and date on item hover',
+                        type: 'checkbox',
+                    },
+                    autoFillBreakEvenPrice: {
+                        title: 'Auto fill price',
+                        type: 'checkbox',
+                        description: 'When selling an item, the price will be automatically filled in with the average sell price in the set timeframe.',
+                    },
+                    countPendingTrades: {
+                        title: 'Calculate pending trades',
+                        type: 'checkbox',
+                        description: 'When calculating statistics, pending trades will be taken into account.',
+                    },
+                    countScraps: {
+                        title: 'Calculate scraps',
+                        type: 'checkbox',
+                        description: 'When calculating statistics, scraps will be taken into account.',
+                    },
+                    statisticsTimeframe: {
+                        title: 'Timeframe',
+                        // type: 'timeframeselect',
+                        type: 'switch',
+                        description: 'The timeframe that will be used to calculate statistics.',
+                        options: {
+                            all: 'All time',
+                            last_24hr: 'Last 24 hours',
+                            last_week: 'Last week',
+                            last_month: 'Last month',
+                            last_3_months: 'Last 3 months',
+                            last_6_months: 'Last 6 months',
+                            last_year: 'Last year',
+                            ytd: 'Since january 1st',
+                            mtd: 'Since 1st of month',
+                        }
+                    },
+                },
+                footerButtons: [
+                    {
+                        label: 'back',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('main');
+                        },
+                        style: {
+                            left: '12px',
+                        }
+                    },
+                    {
+                        label: 'close',
+                        action() {
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ],
             },
         },
         // Seperate values object, where settings are loaded one by one, for if i decide to add settings later on
         values: {
             // If true, sell/buy statistics will be shown in the item tooltip when an item is hovered
             hoverEnabled: true,
-            statisticsTimeframe: {
-                unit: 'all', // 'days', 'months', 'years', special values: 'all', 'ytd', 'mtd'
-                value: 1, 
-            },
+            statisticsTimeframe: 'all',
             // If true, the script will automatically fill in the price when selling an item
             // The price will be the average buy price of the item of the configured timeframe
             autoFillBreakEvenPrice: true,
             // If true, the script will take trades that are still pending into account when calculating statistics
             countPendingTrades: true,
+            countScraps: true,
+        },
+        async reset() {
+            await GM.setValue('SETTINGS_values', {});
+            this.values = {};
+
+            await this.load();
         },
         async load() {
             const values = await GM.getValue('SETTINGS_values', {});
 
             // Merge values with default values
-            mergeDeep(this.values, values);
+            this.values = mergeDeep(this.values, values);
         },
         async save() {
             await GM.setValue('SETTINGS_values', this.values);
         },
+        async toggle(setting) {
+            await this.load();
+            this.values[setting] = !this.values[setting];
+            await this.save();
+        },
+        async set(setting, value) {
+            await this.load();
+            this.values[setting] = value;
+            await this.save();
+        },
+        closePrompt() {
+            unsafeWindow.prompt.parentNode.style.display = "none";
+            unsafeWindow.prompt.innerHTML = "";
+            unsafeWindow.prompt.style.height = "";
+            pageLock = false;
+        },
+        renderSettingsPrompt(page = 'main') {
+            pageLock = true;
+
+			unsafeWindow.prompt.classList.remove("warning");
+			unsafeWindow.prompt.classList.remove("redhighlight");
+
+            const pageInfo = this.ui[page];
+
+            if (pageInfo.class) {
+                unsafeWindow.prompt.classList.add(pageInfo.class);
+            }
+
+        	unsafeWindow.prompt.style.height = "250px";
+            unsafeWindow.prompt.innerHTML = pageInfo.title ? '<div style="text-align: center; text-decoration: underline">' + pageInfo.title + '</div>' : '';
+            if (pageInfo.text) {
+                unsafeWindow.prompt.innerHTML += '<div>' + pageInfo.text + '</div>';
+            }
+            unsafeWindow.prompt.innerHTML += '<br />';
+
+            const historySettingsHolder = document.createElement("div");
+            historySettingsHolder.id = "historySettingsHolder";
+
+            this._renderUi(historySettingsHolder, page);
+
+            unsafeWindow.prompt.appendChild(historySettingsHolder);
+
+            for(const footerButtonInfo of pageInfo.footerButtons || []) {
+
+                const footerButton = document.createElement("button");
+                footerButton.style.position = "absolute";
+                footerButton.style.bottom = "12px";
+                if (footerButtonInfo.action) {
+                    footerButton.addEventListener("click", footerButtonInfo.action);
+                }
+
+                footerButton.textContent = footerButtonInfo.label;
+                
+                for(const styleKey in footerButtonInfo.style) {
+                    footerButton.style[styleKey] = footerButtonInfo.style[styleKey];
+                }
+                unsafeWindow.prompt.appendChild(footerButton);
+            }
+
+            
+            unsafeWindow.prompt.parentNode.style.display = "block";
+            unsafeWindow.prompt.focus();
+        },
+        _renderDescription(holder, descriptionText) {
+            const descriptionElement = document.getElementById('historySettingsDescription');
+            // delete the element
+            if (descriptionElement) {
+                descriptionElement.parentNode.removeChild(descriptionElement);
+            }
+
+            const description = document.createElement('div');
+            description.id = 'historySettingsDescription';
+            description.innerHTML = descriptionText;
+            description.style.position = 'absolute';
+            description.style.top = '140px';
+
+            holder.appendChild(description);
+        },
+        _renderUi(holder, page = 'main') {
+            const elements = this.ui[page].elements;
+            holder.innerHTML = '';
+
+            const self = this;
+            
+            for(const settingKey in elements) {
+                const setting = elements[settingKey];
+                const buttonHolder = document.createElement('div');
+
+                switch (setting.type) {
+                    case 'paragraph':
+                        break;
+                    case 'checkbox':
+                        const checkbox = document.createElement('button');
+                        checkbox.innerText = '[' + (this.values[settingKey] ? 'x' : ' ') + '] ' + setting.title;
+                        checkbox.addEventListener('click', async () => {
+                            await self.toggle(settingKey);
+                            self._renderUi(holder, page);
+                        });
+                        if (setting.description) {
+                            checkbox.addEventListener('mouseover', function () {
+                                self._renderDescription(holder, setting.description);
+                            });
+                        }
+                        buttonHolder.appendChild(checkbox);
+                        holder.appendChild(buttonHolder);
+                        break;
+                    case 'switch':
+                        const switcher = document.createElement('button');
+                        const settingValue = this.values[settingKey];
+                        const settingValueTitle = setting.options[settingValue];
+                        switcher.innerText = setting.title + ': ' + settingValueTitle;
+                        switcher.addEventListener('click', async () => {
+                            const valueKeys = Object.keys(setting.options);
+                            const valueIndex = valueKeys.indexOf(settingValue);
+                            const nextValueIndex = valueIndex + 1 >= valueKeys.length ? 0 : valueIndex + 1;
+                            const nextValue = valueKeys[nextValueIndex];
+                            await self.set(settingKey, nextValue);
+                            self._renderUi(holder, page);
+                        });
+                        if (setting.description) {
+                            switcher.addEventListener('mouseover', function () {
+                                self._renderDescription(holder, setting.description);
+                            });
+                        }
+                        buttonHolder.appendChild(switcher);
+                        holder.appendChild(buttonHolder);
+                        break;
+                    case 'button':
+                        const button = document.createElement('button');
+                        button.innerText = setting.title;
+                        
+                        button.addEventListener('click', setting.action);
+                        if (setting.description) {
+                            button.addEventListener('mouseover', function () {
+                                self._renderDescription(holder, setting.description);
+                            });
+                        }
+                        buttonHolder.appendChild(button);
+                        holder.appendChild(buttonHolder);
+                        break;
+                }
+            }
+        }
     };
 
     /******************************************************
@@ -556,7 +960,7 @@
         if (isObject(target) && isObject(source)) {
         for (const key in source) {
             if (isObject(source[key])) {
-            if (!target[key]) Object.assign(target, { [key]: {} });
+                if (!target.hasOwnProperty(key)) Object.assign(target, { [key]: {} });
                 mergeDeep(target[key], source[key]);
             } else {
                 Object.assign(target, { [key]: source[key] });
@@ -740,7 +1144,7 @@
     // Source: market.js
     // Explanation:
     // Allows this script to add a 'history' tab seemlessly into the marketplace
-    // This approach should make it still compatible with other userscripts for dead frontier.
+    // This approach should make it still compatible with other userscripts and official site scripts.
     const origLoadMarket = unsafeWindow.loadMarket;
     unsafeWindow.loadMarket = function() {
         // Execute original function
@@ -802,13 +1206,22 @@
                     historyItemDisplay.id = "historyItemDisplay";
                     historyItemDisplay.classList.add("marketDataHolder");
                     historyItemDisplay.setAttribute('data-offset', 0);
+                    historyItemDisplay.setAttribute('data-per-page', 10);
                     const renderHistoryItems = function () {
                         const offset = parseInt(historyItemDisplay.getAttribute('data-offset'));
-                        // Now we know what the pending trades are, we can load the history
-                        // for(let i = HISTORY.entries.length - 1; i >= 0; i--) {
-                        for(let i = 10; i >= 0; i++) {
-                            const entryIndex = i + offset;
+                        const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
+
+                        const entryCount = HISTORY.entries.length;
+
+                        if (offset >= entryCount) {
+                            return false;
+                        }
+                        
+                        for(let i = 0; i < perPage; i++) {
+                            const entryIndex = entryCount - offset - i - 1;
                             const entry = HISTORY.entries[entryIndex] || null;
+                            // const entryIndex = i + offset;
+                            // const entry = HISTORY.entries[entryIndex] || null;
                             if (!entry) {
                                 continue;
                             }
@@ -841,18 +1254,26 @@
                             // row.innerHTML = "<div class='itemName cashhack credits' data-cash='" + entry.itemname + "'>" + entry.itemname + "</div><div class='tradeZone'>" + entry.trade_zone + "</div><div class='seller'>" + entry.member_name + "</div><div class='salePrice' style='color: red;'>$" + entry.price + "</div>";
                             historyItemDisplay.appendChild(row);
                         }
+
+                        return true;
                     };
                     
                     const onHistoryScroll = function () {
-                        const scrollPercentage = this.scrollTop / (this.scrollHeight - this.clientHeight);
+                        const fullScrollHeight = historyItemDisplay.scrollHeight;
+                        const scrolledHeight = historyItemDisplay.scrollTop + historyItemDisplay.clientHeight;
+                        const diff = fullScrollHeight - scrolledHeight;
 
-                        if (scrollPercentage < 0.9) {
+                        if (diff > 50) {
                             return;
                         }
 
+                        const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
                         historyItemDisplay.removeEventListener('scroll', onHistoryScroll);
-                        historyItemDisplay.setAttribute('data-offset', parseInt(historyItemDisplay.getAttribute('data-offset')) + 10);
-                        renderHistoryItems();
+                        historyItemDisplay.setAttribute('data-offset', parseInt(historyItemDisplay.getAttribute('data-offset')) + perPage);
+                        const hasMore = renderHistoryItems();
+                        if (hasMore) {
+                            historyItemDisplay.addEventListener('scroll', onHistoryScroll);
+                        }
                     };
 
                     marketHolder.appendChild(historyItemDisplay);
@@ -878,10 +1299,9 @@
                         webCall("trade_search", dataArray, resolve, true);
                         // Cache will be updated by webCall hook somewhere else in the code
                     });
-
-                    // historyItemDisplay.addEventListener('scroll', onHistoryScroll);
-
+                    
                     renderHistoryItems();
+                    historyItemDisplay.addEventListener('scroll', onHistoryScroll);
                     
                     promptEnd();
                     break;
@@ -895,7 +1315,7 @@
     // Which prevents us having to do extra requests while still getting the data we need
     // The less requests, the better.
     // Plus DeadFrontier's webCalls are executed at exactly the right moments we need (like after selling)
-    // This approach should make it still compatible with other userscripts for dead frontier.
+    // This approach should make it still compatible with other userscripts and official site scripts.
     const originalWebCall = unsafeWindow.webCall;
     unsafeWindow.webCall = function (call, params, callback, hashed) {
         // Override the callback function to execute any hooks
@@ -1008,7 +1428,6 @@
     };
 
     var origInfoCard = unsafeWindow.infoCard || null;
-    console.log({origInfoCard})
     if (origInfoCard) {
         inventoryHolder.removeEventListener("mousemove", origInfoCard, false);
  
@@ -1110,8 +1529,9 @@
                 continue;
             }
 
-            dataObj[key.replace(/^df_inv\d_/, '')] = response.dataObj[key];
+            dataObj[key.replace(/^df_inv\d+_/, '')] = response.dataObj[key];
         }
+        
         const itemId = dataObj.type.split('_')[0];
 
         const entry = {
@@ -1121,6 +1541,34 @@
             item: dataObj.type,
             itemname: globalData[itemId].name,
             quantity: dataObj.quantity, 
+        };
+
+        HISTORY.pushTrade(entry);
+    });
+
+    // Hook into when an item is scrapped
+    onBeforeWebCall('inventory_new', function (request, response) {
+        if (request.params.action !== 'scrap') {
+            return;
+        }
+        if (response.xhr.status != 200) {
+            return;
+        }
+        if (!response.dataObj.hasOwnProperty('OK')) {
+            return;
+        }
+        const itemnum = request.params.itemnum;
+        const quantity = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_quantity'];
+        const itemTypeId = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_type'];
+        const itemId = itemTypeId.split('_')[0];
+
+        const entry = {
+            trade_id: request.params.hash,
+            action: 'scrap',
+            price: request.params.price,
+            item: request.params.expected_itemtype,
+            itemname: globalData[itemId].name,
+            quantity,
         };
 
         HISTORY.pushTrade(entry);
@@ -1155,7 +1603,6 @@
         }
 
         HISTORY.cache.pending_trade_ids = pendingTradeIds;
-        HISTORY.cache.initialized = true;
     });
     
     
@@ -1190,6 +1637,9 @@
     await HISTORY.load();
     HISTORY.resetCache();
 
+    // Load settings
+    await SETTINGS.load();
+
     // DEBUG
     unsafeWindow.HISTORY = HISTORY;
 
@@ -1205,8 +1655,37 @@
         LOOKUP.category__item_id[categoryId].push(itemId);
     }
 
+    for (const categoryId in LOOKUP.category__item_id) {
+        LOOKUP.category__item_id[categoryId].sort((a, b) => {
+            const itemA = unsafeWindow.globalData[a];
+            const itemB = unsafeWindow.globalData[b];
+
+            const nameA = itemA.name?.toLowerCase() || '';
+            const nameB = itemB.name?.toLowerCase() || '';
+
+            return nameA.localeCompare(nameB);
+        });
+    }
+
+    delete LOOKUP.category__item_id['broken'];
+
     // DEBUG
     unsafeWindow.LOOKUP = LOOKUP;
+    unsafeWindow.SETTINGS = SETTINGS;
+
+    var historySettingsButton = document.createElement("button");
+    historySettingsButton.classList.add("opElem");
+    historySettingsButton.style.left = "400px";
+    historySettingsButton.style.bottom = "86px";
+    historySettingsButton.textContent = "History Menu";
+    inventoryHolder.appendChild(historySettingsButton);
+
+    
+    historySettingsButton.addEventListener("click", function () {
+        const fn = SETTINGS.renderSettingsPrompt.bind(SETTINGS);
+
+        fn();
+    });
 
 
     // onAfterWebCall(null, function (request, response, result) {
