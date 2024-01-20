@@ -31,6 +31,19 @@
     // Will be set after page init (below script)
     let SEARCHABLE_ITEMS = [];
 
+    const TIMEFRAME_OPTIONS = {
+        all: 'All time',
+        last_24hr: 'Last 24 hours',
+        last_week: 'Last week',
+        last_month: 'Last month',
+        last_3_months: 'Last 3 months',
+        last_6_months: 'Last 6 months',
+        last_year: 'Last year',
+        ytd: 'Since january 1st',
+        mtd: 'Since 1st of month',
+        wtd: 'Since monday',
+    };
+
     const WEBCALL_HOOKS = {
         before: {},
         after: {},
@@ -47,38 +60,47 @@
     // And calculating statistics
     const HISTORY = {
         entries: [],
-        
+        selectedItem: null,
+
         // Cached values, to prevent having to loop through all entries every time
         // Causing performance to improve
-        cache: {
-            trade_id: {}, // trades indexed by trade_id
-            item_id: {}, // trades indexed by item_id
-
-            item_id__amount_sold: {}, // total sell numbers, indexed by item_id
-            item_id__amount_bought: {}, // total buy numbers, indexed by item_id
-            item_id__avg_price_sold: {}, // average sell price, indexed by item_id
-            item_id__avg_price_bought: {}, // average buy price, indexed by item_id
-            item_id__last_price_sold: {}, // last sell price, indexed by item_id
-            item_id__last_price_bought: {}, // last buy price, indexed by item_id
-            item_id__last_quantity_sold: {}, // last sell quantity, indexed by item_id
-            item_id__last_quantity_bought: {}, // last buy quantity, indexed by item_id
-            item_id__last_date_sold: {}, // last sell date, indexed by item_id
-            item_id__last_date_bought: {}, // last buy date, indexed by item_id
-
-            item_id__sold: {}, // trades indexed by trade_id
-            item_id__bought: {}, // trades indexed by trade_id
-            item_id__scrapped: {}, // trades indexed by trade_id
-
-            pending_trade_ids: [], // trade_ids of pending trades
-        },
-        storageKey() {
-            return 'HISTORY_entries_' + unsafeWindow.userVars.userID;
-        },
+        cache: {},
         resetCache() {
+            this.cache = {
+                trade_id: {}, // trades indexed by trade_id
+                item_id: {}, // trades indexed by item_id
+    
+                item_id__amount_sold: {}, // total sell numbers, indexed by item_id
+                item_id__amount_bought: {}, // total buy numbers, indexed by item_id
+                item_id__avg_price_sold: {}, // average sell price, indexed by item_id
+                item_id__avg_price_bought: {}, // average buy price, indexed by item_id
+                item_id__total_price_sold: {}, // total sell price, indexed by item_id
+                item_id__total_price_bought: {}, // total buy price, indexed by item_id
+                item_id__last_price_sold: {}, // last sell price, indexed by item_id
+                item_id__last_price_bought: {}, // last buy price, indexed by item_id
+                item_id__last_quantity_sold: {}, // last sell quantity, indexed by item_id
+                item_id__last_quantity_bought: {}, // last buy quantity, indexed by item_id
+                item_id__last_date_sold: {}, // last sell date, indexed by item_id
+                item_id__last_date_bought: {}, // last buy date, indexed by item_id
+    
+                item_id__sold: {}, // trades indexed by trade_id
+                item_id__bought: {}, // trades indexed by trade_id
+                item_id__scrapped: {}, // trades indexed by trade_id
+    
+                pending_trade_ids: [], // trade_ids of pending trades
+            };
+
+            this.initCache();
+        },
+        storageKey(key) {
+            return 'HISTORY_' + key + '_' + unsafeWindow.userVars.userID;
+        },
+        initCache() {
             const entries = this.entries;
             for (const entry of entries) {
                 const tradeId = entry.trade_id;
-                const itemId = entry.item.split('_')[0];
+                const itemId = getBaseItemId(entry.item);
+                // const globalItemId = getGlobalDataItemId(entry.item);
 
                 this.cache.trade_id[tradeId] = entry;
 
@@ -87,23 +109,23 @@
                 }
                 this.cache.item_id[itemId].push(entry);
 
-                if (!this.cache.item_id__amount_sold.hasOwnProperty(itemId)) {
-                    this.cache.item_id__amount_sold[itemId] = 0;
-                }
+                // if (!this.cache.item_id__amount_sold.hasOwnProperty(itemId)) {
+                //     this.cache.item_id__amount_sold[itemId] = 0;
+                // }
 
-                if (!this.cache.item_id__amount_bought.hasOwnProperty(itemId)) {
-                    this.cache.item_id__amount_bought[itemId] = 0;
-                }
+                // if (!this.cache.item_id__amount_bought.hasOwnProperty(itemId)) {
+                //     this.cache.item_id__amount_bought[itemId] = 0;
+                // }
 
-                const action = entry.action; // 'buy' or 'sell'
-                const itemcat = unsafeWindow.globalData[itemId].itemcat;
-                const quantity = realQuantity(entry.quantity, itemcat)
+                // const action = entry.action; // 'buy' or 'sell'
+                // const itemcat = unsafeWindow.globalData[globalItemId].itemcat;
+                // const quantity = realQuantity(entry.quantity, itemcat)
 
-                if (action === 'buy') {
-                    this.cache.item_id__amount_bought[itemId] += quantity;
-                } else if (action === 'sell') {
-                    this.cache.item_id__amount_sold[itemId] += quantity;
-                }
+                // if (action === 'buy') {
+                //     this.cache.item_id__amount_bought[itemId] += quantity;
+                // } else if (action === 'sell') {
+                //     this.cache.item_id__amount_sold[itemId] += quantity;
+                // }
             }
         },
         clearCacheForItem(itemId) {
@@ -124,15 +146,17 @@
             return this.cache.item_id[tradeId] = this.entries.find(entry => entry.trade_id === tradeId);;
         },
         async pushTrade(entry) {
-            entry.date = Date.now();
+            if (!entry.date) {
+                entry.date = Date.now();
+            }
 
             await this.load();
             this.entries.push(entry);
-            await GM.setValue(this.storageKey(), this.entries);
+            await GM.setValue(this.storageKey('entries'), this.entries);
 
             this.cache.trade_id[entry.trade_id] = entry;
 
-            const itemId = entry.item.split('_')[0];
+            const itemId = getBaseItemId(entry.item);
 
             // Update cache
             if (!this.cache.item_id.hasOwnProperty(itemId)) {
@@ -174,13 +198,13 @@
             const entry = this.entries[index];
 
             this.entries.splice(index, 1);
-            await GM.setValue(this.storageKey(), this.entries);
+            await GM.setValue(this.storageKey('entries'), this.entries);
 
             // Update cache
             delete this.cache.trade_id[tradeId];
 
             // Remove from item_id cache
-            const itemId = entry.item.split('_')[0];
+            const itemId = getBaseItemId(entry.item);
             if (this.cache.item_id.hasOwnProperty(itemId)) {
                 const itemIndex = this.cache.item_id[itemId].findIndex(entry => entry.trade_id === tradeId);
                 if (itemIndex > -1) {
@@ -210,7 +234,7 @@
         // Get info about an item, based on its trades
         getItemInfo(itemId, key) {
             let cacheKey = 'item_id__' + key;
-            let trades, action, lastTradeId, lastTradePrice, lastTradeQuantity, lastTradeDate;
+            let trades, total, action, amount, lastTradeId, lastTradePrice, lastTradeQuantity, lastTradeDate;
             switch (key) {
                 case 'amount_sold':
                 case 'amount_bought':
@@ -222,10 +246,16 @@
                     action = key == 'amount_sold' ? 'sell' : 'buy';
 
                     return this.cache[cacheKey][itemId] = trades.reduce((total, trade) => {
-                        if (trade.action !== action) {
+                        let isAction = trade.action === action;
+                        if (!isAction && SETTINGS.values.countScraps && action == 'sell') {
+                            isAction = trade.action === 'scrap';
+                        }
+
+                        if (!isAction) {
                             return total;
                         }
-                        const tradeItemId = trade.item.split('_')[0];
+
+                        const tradeItemId = getGlobalDataItemId(trade.item);
                         
                         const quantity = realQuantity(trade.quantity, unsafeWindow.globalData[tradeItemId].itemcat);
                         return total + quantity;
@@ -245,15 +275,22 @@
                     lastTradePrice = 0;
 
                     for (const trade of trades) {
-                        if (trade.action !== action) {
+                        let isAction = trade.action === action;
+                        if (!isAction && SETTINGS.values.countScraps && action == 'sell') {
+                            isAction = trade.action === 'scrap';
+                        }
+
+                        if (!isAction) {
                             continue;
                         }
                         if (trade.item !== itemId) {
                             continue;
                         }
-                        if (trade.trade_id <= lastTradeId) {
-                            continue;
-                        }
+
+                        //TODO: check date instead
+                        // if (trade.trade_id <= lastTradeId) {
+                        //     continue;
+                        // }
 
                         lastTradeId = trade.trade_id;
                         lastTradePrice = trade.price;
@@ -280,7 +317,7 @@
                         if (trade.trade_id <= lastTradeId) {
                             continue;
                         }
-                        const tradeItemId = trade.item.split('_')[0];
+                        const tradeItemId = getGlobalDataItemId(trade.item);
 
                         lastTradeId = trade.trade_id;
                         lastTradeQuantity = realQuantity(trade.quantity, unsafeWindow.globalData[tradeItemId].itemcat);
@@ -321,18 +358,46 @@
                         return this.cache[cacheKey][itemId];
                     }
 
-                    const amount = this.getItemInfo(itemId, key.replace('avg_price', 'amount')); // amount_sold or amount_bought
+                    amount = this.getItemInfo(itemId, key.replace('avg_price', 'amount')); // amount_sold or amount_bought
                     if (amount == 0) {
                         return this.cache[cacheKey][itemId] = 0;
                     }
 
+                    action = (key == 'avg_price_sold' ? 'sell' : 'buy');
+
                     trades = this.cache.item_id[itemId];
-                    let total = 0;
+                    total = this.getItemInfo(itemId, key.replace('avg_price', 'total_price')); // total_price_sold or total_price_bought
+
+                    return this.cache[cacheKey][itemId] = total / amount;
+                    break;
+                case 'total_price_sold':
+                case 'total_price_bought':
+                    if (this.cache[cacheKey].hasOwnProperty(itemId)) {
+                        return this.cache[cacheKey][itemId];
+                    }
+
+                    amount = this.getItemInfo(itemId, key.replace('total_price', 'amount')); // amount_sold or amount_bought
+                    if (amount == 0) {
+                        return this.cache[cacheKey][itemId] = 0;
+                    }
+
+                    action = (key == 'total_price_sold' ? 'sell' : 'buy');
+
+                    trades = this.cache.item_id[itemId];
+                    total = 0;
                     for (const trade of trades) {
+                        let isAction = trade.action === action;
+                        if (!isAction && SETTINGS.values.countScraps && action == 'sell') {
+                            isAction = trade.action === 'scrap';
+                        }
+
+                        if (!isAction) {
+                            continue;
+                        }
                         total += parseInt(trade.price);
                     }
 
-                    return this.cache[cacheKey][itemId] = total / amount;
+                    return this.cache[cacheKey][itemId] = total;
                     break;
                 case 'avg_stack_price_sold':
                 case 'avg_stack_price_bought':
@@ -349,7 +414,7 @@
 
         // Called during debugging
         async forceSave() {
-            await GM.setValue(this.storageKey(), this.entries);
+            await GM.setValue(this.storageKey('entries'), this.entries);
         },
         // Called during debugging
         async clearEntries() {
@@ -357,8 +422,69 @@
             await this.forceSave();
         },
 
+        async setSelectedItem(item) {
+            this.selectedItem = item;
+            await GM.setValue(this.storageKey('selectedItem'), item);
+        },
+        async init() {
+            this.selectedItem = await GM.getValue(this.storageKey('selectedItem'), null);
+            await this.load();
+        },
         async load() {
-            this.entries = await GM.getValue(this.storageKey(), []);
+            this.entries = await GM.getValue(this.storageKey('entries'), []);
+        },
+
+        renderEntryPrompt(entry) {
+            pageLock = true;
+
+			unsafeWindow.prompt.classList.remove("warning");
+			unsafeWindow.prompt.classList.remove("redhighlight");
+
+        	unsafeWindow.prompt.style.height = "200px";
+
+            
+            unsafeWindow.prompt.innerHTML = '<div style="text-align: center; text-decoration: underline">Edit entry</div>';
+            unsafeWindow.prompt.innerHTML += '<br />';
+
+            const historyEntryHolder = document.createElement("div");
+            historyEntryHolder.id = "historyEntryHolder";
+
+            
+            // const footerButton = document.createElement("button");
+            // footerButton.style.position = "absolute";
+            // footerButton.style.bottom = "12px";
+            // if (footerButtonInfo.action) {
+            //     footerButton.addEventListener("click", footerButtonInfo.action);
+            // }
+
+            // footerButton.textContent = footerButtonInfo.label;
+            
+            // for(const styleKey in footerButtonInfo.style) {
+            //     footerButton.style[styleKey] = footerButtonInfo.style[styleKey];
+            // }
+            // unsafeWindow.prompt.appendChild(footerButton);
+
+            const closeBtn = document.createElement("button");
+            closeBtn.style.position = "absolute";
+            closeBtn.style.bottom = "12px";
+            closeBtn.style.right = "12px";
+            closeBtn.textContent = "close";
+            closeBtn.addEventListener("click", () => {
+                HISTORY.closeEntryPrompt();
+            });
+            unsafeWindow.prompt.appendChild(closeBtn);
+            
+            unsafeWindow.prompt.parentNode.style.display = "block";
+            unsafeWindow.prompt.focus();
+
+        },
+        closeEntryPrompt() {
+            pageLock = false;
+            unsafeWindow.prompt.parentNode.style.display = "none";
+            unsafeWindow.prompt.innerHTML = "";
+			unsafeWindow.prompt.classList.remove("warning");
+			unsafeWindow.prompt.classList.remove("redhighlight");
+
         },
 
         /**
@@ -523,17 +649,7 @@
                         // type: 'timeframeselect',
                         type: 'switch',
                         description: 'The timeframe that will be used to export the history.',
-                        options: {
-                            all: 'All time',
-                            last_24hr: 'Last 24 hours',
-                            last_week: 'Last week',
-                            last_month: 'Last month',
-                            last_3_months: 'Last 3 months',
-                            last_6_months: 'Last 6 months',
-                            last_year: 'Last year',
-                            ytd: 'Since january 1st',
-                            mtd: 'Since 1st of month',
-                        }
+                        options: TIMEFRAME_OPTIONS
                     },
                     download: {
                         type: 'button',
@@ -545,43 +661,7 @@
                             const sortBy = SETTINGS.values.exportSortBy;
                             const sortDirection = SETTINGS.values.exportSortDirection;
                             const timeframe = SETTINGS.values.exportTimeframe;
-                            let tresholdDate = null;
-
-                            switch (timeframe) {
-                                case 'last_24hr':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setDate(tresholdDate.getDate() - 1);
-                                    break;
-                                case 'last_week':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setDate(tresholdDate.getDate() - 7);
-                                    break;
-                                case 'last_month':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setMonth(tresholdDate.getMonth() - 1);
-                                    break;
-                                case 'last_3_months':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setMonth(tresholdDate.getMonth() - 3);
-                                    break;
-                                case 'last_6_months':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setMonth(tresholdDate.getMonth() - 6);
-                                    break;
-                                case 'last_year':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setFullYear(tresholdDate.getFullYear() - 1);
-                                    break;
-                                case 'ytd':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setMonth(0);
-                                    tresholdDate.setDate(1);
-                                    break;
-                                case 'mtd':
-                                    tresholdDate = new Date();
-                                    tresholdDate.setDate(1);
-                                    break;
-                            }
+                            const tresholdDate = getTresholdDateForTimeframe(timeframe);
 
                             let filteredEntries = HISTORY.entries.filter(entry => {
                                 const entryDate = new Date(entry.date);
@@ -660,8 +740,8 @@
                 elements: {
                     clear: {
                         type: 'button',
-                        title: 'Clear all history',
-                        description: 'Forgets all market sell/buy/scrap history<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
+                        title: 'Clear history',
+                        description: 'Clears all market sell/buy/scrap history older than a specific timeframe<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
                         action() {
                             SETTINGS.renderSettingsPrompt('clear_confirm');
                         }
@@ -700,8 +780,16 @@
             clear_confirm: {
                 class: 'warning',
                 title: 'Clear history',
-                text: 'Are you really sure you want to clear ALL history?<br><br>You can also delete single entries from the history tab in marketplace.<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
-                elements: {},
+                text: 'Are you really sure you want to clear history?<br><br>You can delete single entries by clicking on them in the history tab.<br><br><span style="color: #FF0000">WARNING:</span> This cannot be undone!',
+                descriptionTop: '200px',
+                elements: {
+                    clearHistoryTimeframe: {
+                        title: 'Timeframe',
+                        type: 'switch',
+                        description: 'History entries that are older than this timeframe will be deleted.',
+                        options: TIMEFRAME_OPTIONS
+                    },
+                },
                 footerButtons: [
                     {
                         label: 'no',
@@ -715,9 +803,21 @@
                     {
                         label: 'yes',
                         async action() {
-                            await HISTORY.clearEntries();
+                            if (SETTINGS.values.clearHistoryTimeframe == 'all') {
+                                await HISTORY.clearEntries();
+                            } else {
+                                const tresholdDate = getTresholdDateForTimeframe(SETTINGS.values.clearHistoryTimeframe);
+                                await HISTORY.load();
+                                const entries = HISTORY.entries.filter(entry => {
+                                    const entryDate = new Date(entry.date);
+                                    return entryDate >= tresholdDate;
+                                });
+                                HISTORY.entries = entries;
+                                await HISTORY.forceSave();
+                            }
                             HISTORY.resetCache();
                             SETTINGS.closePrompt();
+                            window.location.reload();
                         },
                         style: {
                             right: '12px',
@@ -763,16 +863,24 @@
                 title: 'Settings',
                 text: '',
                 elements: {
-                    hoverAvgPriceEnabled: {
-                        title: 'Avg price hover enabled',
-                        description: 'Show average sell/buy price and profit/loss in set timeframe on item hover',
-                        type: 'checkbox',
+                    hoverSettings: {
+                        type: 'button',
+                        title: '>>> Hover info settings',
+                        description: 'Settings for the hover info module.',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('hoverSettings');
+                        }
                     },
-                    hoverLastPriceEnabled: {
-                        title: 'Last price hover enabled',
-                        description: 'Show last sell/buy price and date on item hover',
-                        type: 'checkbox',
-                    },
+                    // hoverAvgPriceEnabled: {
+                    //     title: 'Avg price hover enabled',
+                    //     description: 'Show average sell/buy price and profit/loss in set timeframe on item hover',
+                    //     type: 'checkbox',
+                    // },
+                    // hoverLastPriceEnabled: {
+                    //     title: 'Last price hover enabled',
+                    //     description: 'Show last sell/buy price and date on item hover',
+                    //     type: 'checkbox',
+                    // },
                     autoFillBreakEvenPrice: {
                         title: 'Auto fill price',
                         type: 'checkbox',
@@ -781,12 +889,18 @@
                     countPendingTrades: {
                         title: 'Calculate with pending',
                         type: 'checkbox',
-                        description: 'When calculating statistics, pending trades will be taken into account.',
+                        meta: {
+                            resetCache: true,
+                        },
+                        description: 'When calculating statistics, pending trades will be taken into account, if changed, you might have to reload statistics screen.',
                     },
                     countScraps: {
                         title: 'Calculate with scraps',
                         type: 'checkbox',
-                        description: 'When calculating statistics, scraps will be taken into account.',
+                        meta: {
+                            resetCache: true,
+                        },
+                        description: 'When calculating statistics, scraps will be taken into account, if changed, you might have to reload statistics screen.',
                     },
                     statisticsTimeframe: {
                         title: 'Timeframe',
@@ -803,7 +917,19 @@
                             last_year: 'Last year',
                             ytd: 'Since january 1st',
                             mtd: 'Since 1st of month',
-                        }
+                        },
+                        meta: {
+                            resetCache: true,
+                        },
+                    },
+                    defaultHistoryPage: {
+                        title: 'Default page',
+                        type: 'switch',
+                        description: 'The page that will be shown when opening the history tab.',
+                        options: {
+                            list: 'List',
+                            stats: 'Statistics',
+                        },
                     },
                 },
                 footerButtons: [
@@ -827,12 +953,116 @@
                     }
                 ],
             },
+            hoverSettings: {
+                title: 'Hover settings',
+                text: 'Here you can configure what elements you see when you hover an item.',
+                descriptionStrategy: 'text',
+                style: {
+                    position: 'absolute',
+                    bottom: '50px',
+                },
+                elements: {
+                    hoverEnabled: {
+                        title: 'Hover info enabled',
+                        description: 'Show info on item hover',
+                        type: 'checkbox',
+                    },
+                    hoverAvgSellPriceEnabled: {
+                        title: 'Average sell price',
+                        description: 'Show average sell price in set timeframe.',
+                        type: 'checkbox',
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        },
+                    },
+                    hoverAvgBuyPriceEnabled: {
+                        title: 'Average buy price',
+                        description: 'Show average buy price in set timeframe.',
+                        type: 'checkbox',
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        },
+                    },
+                    hoverAmountSoldEnabled: {
+                        title: 'Amount sold',
+                        description: 'Show amount sold in set timeframe.',
+                        type: 'checkbox',
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        },
+                    },
+                    hoverAmountBoughtEnabled: {
+                        title: 'Amount bought',
+                        description: 'Show amount bought in set timeframe.',
+                        type: 'checkbox',
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        },
+                    },
+                    hoverLastSellPriceEnabled: {
+                        title: 'Last sell price',
+                        description: 'Show the most recent price you sold this item for.',
+                        type: 'checkbox',
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        },
+                    },
+                    hoverLastBuyPriceEnabled: {
+                        title: 'Last buy price',
+                        description: 'Show the most recent price you bought this item for.',
+                        type: 'checkbox',
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        },
+                    },
+                    hoverAvgProfitEnabled: {
+                        title: 'Average profit per item',
+                        description: 'Show average profit per item in set timeframe.',
+                        type: 'checkbox',
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        }
+                    },
+                },
+                footerButtons: [
+                    {
+                        label: 'back',
+                        action() {
+                            SETTINGS.renderSettingsPrompt('settings');
+                        },
+                        style: {
+                            left: '12px',
+                        }
+                    },
+                    {
+                        label: 'close',
+                        action() {
+                            SETTINGS.closePrompt();
+                        },
+                        style: {
+                            right: '12px',
+                        }
+                    }
+                ],
+            },
         },
         // Seperate values object, where settings are loaded one by one, for if i decide to add settings later on
         values: {
             // If true, sell/buy statistics will be shown in the item tooltip when an item is hovered
             hoverEnabled: true,
+            
+            hoverAvgSellPriceEnabled: true,
+            hoverAvgBuyPriceEnabled: true,
+            hoverAmountSoldEnabled: true,
+            hoverAmountBoughtEnabled: true,
+            hoverLastSellPriceEnabled: true,
+            hoverLastBuyPriceEnabled: true,
+            hoverAvgProfitEnabled: true,
+
+            defaultHistoryPage: 'list',
             statisticsTimeframe: 'all',
+            clearHistoryTimeframe: 'all',
+
             // If true, the script will automatically fill in the price when selling an item
             // The price will be the average buy price of the item of the configured timeframe
             autoFillBreakEvenPrice: true,
@@ -855,6 +1085,8 @@
 
             // Merge values with default values
             this.values = mergeDeep(this.values, values);
+
+            unsafeWindow.historyScreen = this.values.defaultHistoryPage;
         },
         async save() {
             await GM.setValue('SETTINGS_values', this.values);
@@ -892,12 +1124,13 @@
         	unsafeWindow.prompt.style.height = "280px";
             unsafeWindow.prompt.innerHTML = pageInfo.title ? '<div style="text-align: center; text-decoration: underline">' + pageInfo.title + '</div>' : '';
             if (pageInfo.text) {
-                unsafeWindow.prompt.innerHTML += '<div>' + pageInfo.text + '</div>';
+                unsafeWindow.prompt.innerHTML += '<div id="historySettingsPageText">' + pageInfo.text + '</div>';
             }
             unsafeWindow.prompt.innerHTML += '<br />';
 
             const historySettingsHolder = document.createElement("div");
             historySettingsHolder.id = "historySettingsHolder";
+            // historySettingsHolder.style.position = "absolute";
 
             this._renderUi(historySettingsHolder, page);
 
@@ -924,27 +1157,62 @@
             unsafeWindow.prompt.parentNode.style.display = "block";
             unsafeWindow.prompt.focus();
         },
-        _renderDescription(holder, descriptionText) {
-            const descriptionElement = document.getElementById('historySettingsDescription');
-            // delete the element
-            if (descriptionElement) {
-                descriptionElement.parentNode.removeChild(descriptionElement);
+        _renderDescription(holder, descriptionText, pageInfo) {
+            const strategy = pageInfo.descriptionStrategy || 'bottom';
+
+            if (strategy == 'bottom') {
+                const descriptionElement = document.getElementById('historySettingsDescription');
+                // delete the element
+                if (descriptionElement) {
+                    descriptionElement.parentNode.removeChild(descriptionElement);
+                }
+    
+                if (!descriptionText) {
+                    return;
+                }
+    
+                const description = document.createElement('div');
+                description.id = 'historySettingsDescription';
+                description.innerHTML = descriptionText;
+                description.style.position = 'absolute';
+                const top = pageInfo.descriptionTop || '140px';
+                description.style.top = top;
+    
+                holder.appendChild(description);
+            } else if (strategy == 'text') {
+                const historySettingsPageText = document.getElementById('historySettingsPageText');
+                if (!historySettingsPageText) {
+                    return;
+                }
+                historySettingsPageText.style.display = 'none';
+
+                const existingDescription = document.getElementById('historySettingsDescription');
+                if (existingDescription) {
+                    existingDescription.parentNode.removeChild(existingDescription);
+                }
+
+                if (!descriptionText) {
+                    historySettingsPageText.style.display = '';
+                    return;
+                }
+
+                const description = document.createElement('div');
+                description.id = 'historySettingsDescription';
+                description.innerHTML = descriptionText;
+
+                historySettingsPageText.parentNode.insertBefore(description, historySettingsPageText.nextSibling);
             }
-
-            if (!descriptionText) {
-                return;
-            }
-
-            const description = document.createElement('div');
-            description.id = 'historySettingsDescription';
-            description.innerHTML = descriptionText;
-            description.style.position = 'absolute';
-            description.style.top = '140px';
-
-            holder.appendChild(description);
         },
         _renderUi(holder, page = 'main') {
-            const elements = this.ui[page].elements;
+            const pageInfo = this.ui[page];
+
+            if (pageInfo.style) {
+                for(const styleKey in pageInfo.style) {
+                    holder.style[styleKey] = pageInfo.style[styleKey];
+                }
+            }
+
+            const elements = pageInfo.elements;
             holder.innerHTML = '';
 
             const self = this;
@@ -959,16 +1227,31 @@
                     case 'checkbox':
                         const checkbox = document.createElement('button');
                         checkbox.innerText = '[' + (this.values[settingKey] ? 'x' : ' ') + '] ' + setting.title;
+                        if (typeof setting.disabled === 'function') {
+                            checkbox.disabled = setting.disabled();
+                        }
+
+                        if (checkbox.disabled) {
+                            buttonHolder.appendChild(checkbox);
+                            holder.appendChild(buttonHolder);
+                            break;
+                        }
+
                         checkbox.addEventListener('click', async () => {
                             await self.toggle(settingKey);
+                            if (setting.meta) {
+                                if (setting.meta.resetCache) {
+                                    HISTORY.resetCache();
+                                }
+                            }
                             self._renderUi(holder, page);
                         });
                         if (setting.description) {
                             checkbox.addEventListener('mouseover', function () {
-                                self._renderDescription(holder, setting.description);
+                                self._renderDescription(holder, setting.description, pageInfo);
                             });
                             checkbox.addEventListener('mouseout', function () {
-                                self._renderDescription(holder, null);
+                                self._renderDescription(holder, null, pageInfo);
                             });
                         }
                         buttonHolder.appendChild(checkbox);
@@ -985,14 +1268,19 @@
                             const nextValueIndex = valueIndex + 1 >= valueKeys.length ? 0 : valueIndex + 1;
                             const nextValue = valueKeys[nextValueIndex];
                             await self.set(settingKey, nextValue);
+                            if (setting.meta) {
+                                if (setting.meta.resetCache) {
+                                    HISTORY.resetCache();
+                                }
+                            }
                             self._renderUi(holder, page);
                         });
                         if (setting.description) {
                             switcher.addEventListener('mouseover', function () {
-                                self._renderDescription(holder, setting.description);
+                                self._renderDescription(holder, setting.description, pageInfo);
                             });
                             switcher.addEventListener('mouseout', function () {
-                                self._renderDescription(holder, null);
+                                self._renderDescription(holder, null, pageInfo);
                             });
                         }
                         buttonHolder.appendChild(switcher);
@@ -1005,10 +1293,10 @@
                         button.addEventListener('click', setting.action);
                         if (setting.description) {
                             button.addEventListener('mouseover', function () {
-                                self._renderDescription(holder, setting.description);
+                                self._renderDescription(holder, setting.description, pageInfo);
                             });
                             button.addEventListener('mouseout', function () {
-                                self._renderDescription(holder, null);
+                                self._renderDescription(holder, null, pageInfo);
                             });
                         }
                         buttonHolder.appendChild(button);
@@ -1072,7 +1360,7 @@
 
     
     function maxStack(itemId) {
-        itemId = itemId.split('_')[0];
+        itemId = getGlobalDataItemId(itemId);
         const itemcat = unsafeWindow.globalData[itemId].itemcat;
         if (itemcat == 'armour' || itemcat == 'weapon') {
             return 1;
@@ -1193,6 +1481,16 @@
         return date.toISOString().split('.')[0].replace('T', ' ');
     }
 
+    function formatNumber(num) {
+        return (new Number(num))
+            .toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2})
+            .replace(/\.0+$/, '');
+    }
+
+    function formatMoney(num) {
+        return (num < 0 ? '-' : '') + '$' + formatNumber(Math.abs(num));
+    }
+
     function historyAction(e) {
 
         var question = false;
@@ -1217,18 +1515,16 @@
             }
             return SEARCHABLE_ITEMS
                 .filter(itemId => {
-                    const useItemId = itemId.split('_')[0];
-                    const itemName = unsafeWindow.itemNamer(itemId, maxStack(useItemId))
+                    const itemName = unsafeWindow.itemNamer(itemId, '')
                         .toLowerCase()
                         .replace(/[\.\s]/g, '');
                     return itemName.includes(query) || itemId.includes(query);
                 })
-                // .map(item => ({item, ...unsafeWindow.globalData[item.split('_')[0]]}))
                 .map(item => {
-                    const itemId = item.split('_')[0];
                     return {
                         item,
-                        name: itemNamer(item, maxStack(itemId)),
+                        // name: itemNamer(item, maxStack(item)),
+                        name: itemNamer(item, ''),
                     }
                 })
                 .sort((a, b) => {
@@ -1304,10 +1600,73 @@
         }
     }
 
+    function getGlobalDataItemId(rawItemId) {
+        return rawItemId.split('_')[0];
+    }
+
+    function getBaseItemId(rawItemId) {
+        return rawItemId.replace(/_stats\d+/, '');
+    }
+
+    function getTresholdDateForTimeframe(timeframe) {
+        let tresholdDate = null;
+        switch (timeframe) {
+            case 'last_24hr':
+                tresholdDate = new Date();
+                tresholdDate.setDate(tresholdDate.getDate() - 1);
+                break;
+            case 'last_week':
+                tresholdDate = new Date();
+                tresholdDate.setDate(tresholdDate.getDate() - 7);
+                break;
+            case 'last_month':
+                tresholdDate = new Date();
+                tresholdDate.setMonth(tresholdDate.getMonth() - 1);
+                break;
+            case 'last_3_months':
+                tresholdDate = new Date();
+                tresholdDate.setMonth(tresholdDate.getMonth() - 3);
+                break;
+            case 'last_6_months':
+                tresholdDate = new Date();
+                tresholdDate.setMonth(tresholdDate.getMonth() - 6);
+                break;
+            case 'last_year':
+                tresholdDate = new Date();
+                tresholdDate.setFullYear(tresholdDate.getFullYear() - 1);
+                break;
+            case 'ytd':
+                tresholdDate = new Date();
+                tresholdDate.setMonth(0);
+                tresholdDate.setDate(1);
+                break;
+            case 'mtd':
+                tresholdDate = new Date();
+                tresholdDate.setDate(1);
+                break;
+            case 'wtd':
+                tresholdDate = new Date();
+                tresholdDate.setDate(tresholdDate.getDate() - tresholdDate.getDay());
+                break;
+        }
+
+        return tresholdDate;
+    }
+
     /******************************************************
      * Styles
      ******************************************************/
     // GM_addStyle_object('#marketplace', {});
+    GM_addStyle_object('.cashhack.cashhack-relative', {
+        '$ &:before': {
+            position: 'relative',
+        },
+        position: 'relative',
+    });
+
+    GM_addStyle_object('.historyInfoContainer', {
+        textAlign: 'left',
+    });
 
     GM_addStyle_object('#marketplace #historySettings', {
         position: 'absolute',
@@ -1321,7 +1680,7 @@
     });
 
     GM_addStyle_object('#marketplace #historyItemDisplay', {
-        top: '104px',
+        top: '174px',
         bottom: '110px',
     });
 
@@ -1493,11 +1852,103 @@
                     historyNavigation.appendChild(listBtn);
                     historyNavigation.appendChild(statsBtn);
 
+                    const searchBox = document.createElement("div");
+                    searchBox.id = "historySearchArea";
+
+                    if (HISTORY.selectedItem) {
+                        searchBox.innerHTML = `
+                            Selected item: <button id="clearHistoryItem">[remove]</button>
+                            <br>
+                            <div style='display: inline-block;' class="itemName cashhack cashhack-relative" data-cash="${unsafeWindow.itemNamer(HISTORY.selectedItem, HISTORY.selectedItem == 'credits' ? '' : maxStack(HISTORY.selectedItem))}">
+                            </div>
+                        `;
+
+                        const clearHistoryItemBtn = searchBox.querySelector('#clearHistoryItem');
+                        clearHistoryItemBtn.addEventListener('click', function () {
+                            HISTORY.setSelectedItem(null);
+                            loadMarket();
+                        });
+                    } else {
+                        searchBox.innerHTML = `
+                            <div style='text-align: left; width: 185px; display: inline-block;'>
+                                Search for item:<br /><input id='historySearchField' type='text' name='historySearch' />
+                            </div>
+                        `;
+                        
+                        const searchInput = searchBox.querySelector('#historySearchField');
+
+                        
+                        const searchFn = debouncedItemSearch();
+
+                        searchInput.addEventListener('input', function () {
+                            searchFn(this.value, function (results) {
+                                searchResultBox.innerHTML = '';
+                                for(const result of results) {
+                                    // const resultRow = document.createElement('div');
+
+                                    const resultButton = document.createElement('button');
+                                    resultButton.innerText = result.name;
+                                    resultButton.style.width = '100%';
+                                    resultButton.style.textAlign = 'left';
+                                    resultButton.classList.add("fakeItem");
+                                    resultButton.setAttribute("data-type", result.item);
+                                    resultButton.setAttribute("data-quantity", result.item == 'credits' ? '' : maxStack(result.item));
+        
+                                    resultButton.addEventListener('click', async function () {
+                                        this.disabled = true;
+                                        await HISTORY.setSelectedItem(result.item)
+                                        searchResultBox.innerHTML = '';
+                                        searchResultBox.classList.add('hidden');
+
+                                        loadMarket();
+                                        // searchInput.value = result.name;
+                                        // searchResultBox.innerHTML = '';
+                                    });
+                                    // resultRow.appendChild(resultButton);
+                                    // searchResultBox.appendChild(resultRow);
+                                    searchResultBox.appendChild(resultButton);
+                                }
+
+                                if (!results.length) {
+                                    searchResultBox.classList.add('hidden');
+                                } else {
+                                    searchResultBox.classList.remove('hidden');
+                                }
+                            });
+                        });
+                        searchInput.addEventListener('blur', function (e) {
+                            // Check if not focused on result box
+                            if (e.relatedTarget && e.relatedTarget.parentNode.id == 'historyItemSearchResultBox') {
+                                return;
+                            }
+
+                            searchResultBox.classList.add('hidden');
+                        });
+                        searchInput.addEventListener('focus', function () {
+                            // If result box has results, show it
+                            if (searchResultBox.children.length) {
+                                searchResultBox.classList.remove('hidden');
+                            }
+                        });
+
+                        const searchResultBox = document.createElement("div");
+                        searchResultBox.id = "historyItemSearchResultBox";
+                        searchResultBox.classList.add("hidden");
+                        
+                        searchBox.appendChild(searchResultBox);
+
+                    }
+                    marketHolder.appendChild(searchBox);
                     // Add history navbar below
     
                     switch (unsafeWindow.historyScreen) {
                         case 'list':
                             listBtn.disabled = true;
+
+                            let historyEntries = HISTORY.entries;
+                            if (HISTORY.selectedItem) {
+                                historyEntries = historyEntries.filter(entry => entry.item == HISTORY.selectedItem);
+                            }
                             
                             const boxLabels = document.createElement("div");
                             boxLabels.id = "historyLabels";
@@ -1508,19 +1959,28 @@
                                 <span style='position: absolute; left: 480px; width: 70px; width: max-content;'>Datetime</span>
                             `;
                             boxLabels.classList.add("opElem");
-                            boxLabels.style.top = "90px";
+                            boxLabels.style.top = "160px";
                             boxLabels.style.left = "26px";
+
+                            const historyResultsText = document.createElement("div");
+                            historyResultsText.id = "historyResultsText";
+                            historyResultsText.classList.add("opElem");
+                            historyResultsText.style.top = "90px";
+                            historyResultsText.style.right = "20px";
+                            // historyResultsText.style.width = "100%";
+                            historyResultsText.innerText = historyEntries.length + ' result' + (historyEntries.length == 1 ? '' : 's');
             
                             const historyItemDisplay = document.createElement("div");
                             historyItemDisplay.id = "historyItemDisplay";
                             historyItemDisplay.classList.add("marketDataHolder");
                             historyItemDisplay.setAttribute('data-offset', 0);
-                            historyItemDisplay.setAttribute('data-per-page', 10);
+                            historyItemDisplay.setAttribute('data-per-page', 20);
+                            
                             const renderHistoryItems = function () {
                                 const offset = parseInt(historyItemDisplay.getAttribute('data-offset'));
                                 const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
         
-                                const entryCount = HISTORY.entries.length;
+                                const entryCount = historyEntries.length;
         
                                 if (offset >= entryCount) {
                                     return false;
@@ -1528,9 +1988,9 @@
                                 
                                 for(let i = 0; i < perPage; i++) {
                                     const entryIndex = entryCount - offset - i - 1;
-                                    const entry = HISTORY.entries[entryIndex] || null;
+                                    const entry = historyEntries[entryIndex] || null;
                                     // const entryIndex = i + offset;
-                                    // const entry = HISTORY.entries[entryIndex] || null;
+                                    // const entry = historyEntries[entryIndex] || null;
                                     if (!entry) {
                                         continue;
                                     }
@@ -1550,10 +2010,23 @@
                                     row.setAttribute("data-quantity", entry.quantity);
                                     row.setAttribute("data-price", entry.price);
                                     row.setAttribute("data-trade-id", entry.trade_id);
+
+                                    row.addEventListener('click', function () {
+                                        if (pageLock) return;
+                                        const tradeId = this.getAttribute('data-trade-id');
+                                        const trade = HISTORY.cache.trade_id[tradeId];
+                                        if (!trade) {
+                                            alert('Could not find trade in cache');
+                                            return;
+                                        }
+
+                                        HISTORY.renderEntryPrompt(trade);
+                                    });
+
         
                                     let afterName = calcMCTag(entry.item, false, "span", "") || '';
         
-                                    const itemId = entry.item.split('_')[0];
+                                    const itemId = getGlobalDataItemId(entry.item);
                                     const itemCat = getItemType(unsafeWindow.globalData[itemId]);
                                     if (itemCat == 'ammo') {
                                         afterName += ' <span>(' + entry.quantity + ')</span>';
@@ -1593,6 +2066,7 @@
         
                             marketHolder.appendChild(historyItemDisplay);
                             marketHolder.appendChild(boxLabels);
+                            marketHolder.appendChild(historyResultsText);
             
                             await HISTORY.load();
                             // retrieve current user's pending trades
@@ -1618,88 +2092,142 @@
                             break;
                         case 'stats':
                             statsBtn.disabled = true;
-                            const searchBox = document.createElement("div");
-                            searchBox.id = "historySearchArea";
-                            searchBox.innerHTML = `
-                                <div style='text-align: left; width: 185px; display: inline-block;'>
-                                    Add item:<br /><input id='historySearchField' type='text' name='historySearch' />
-                                </div>
-                            `;
+
                             const filterBox = document.createElement("div");
                             filterBox.id = "historyFilterArea";
                             // Filter box shows items that are added to search on
                             // But also a date range select
                             // filterBox.innerHTML =
 
-                            const searchInput = searchBox.querySelector('#historySearchField');
                             // categorySelect += "<div style='display: inline-block; width: 260px;'>In Category:<br/><div id='categoryChoice' data-catname=''><span id='cat'>Everything</span><span id='dog' style='float: right;'>&#9668;</span></div>";
                             // <div class="historyDetailsText">Click on a trade to see more info</div>
                             const historyInfoBox = document.createElement("div");
                             historyInfoBox.id = "historyInfoBox";
-                            historyInfoBox.innerHTML = `
-                                <div style='text-align: left; width: 100%; display: inline-block;'>
-                                    <div class="historyDetailsContainer">
-                                        <div class="historyTradeImage"></div>
-                                    </div>
-                                </div>
-                            `;
 
-                            const searchResultBox = document.createElement("div");
-                            searchResultBox.id = "historyItemSearchResultBox";
-                            searchResultBox.classList.add("hidden");
-                            
-                            searchBox.appendChild(searchResultBox);
+                            if (HISTORY.selectedItem) {
+                                const globalStatisticItem = unsafeWindow.globalData[getGlobalDataItemId(HISTORY.selectedItem)];
+                                const isAmmo = globalStatisticItem.itemcat == 'ammo';
+                                
 
-                            marketHolder.appendChild(searchBox);
+                                const stackSize = maxStack(HISTORY.selectedItem);
+
+                                const perNamer = function (amount) {
+                                    let perName = 'item';
+                                    if (isAmmo) {
+                                        perName = 'round';
+                                    }
+
+                                    if (HISTORY.selectedItem == 'fuelammo') {
+                                        return 'mL';
+                                    }
+
+                                    return perName + (amount == 1 ? '' : 's');
+                                };
+                                const perStackNamer = function (amount) {
+                                    return 'stack' + (amount == 1 ? '' : 's');
+                                };
+
+                                // Title with timeframe
+                                const timeframe = SETTINGS.values.statisticsTimeframe;
+                                const timeframeName = TIMEFRAME_OPTIONS[timeframe];
+
+                                const title = 'Statistics ' + timeframeName.toLowerCase();
+                                const titleElem = document.createElement("div");
+                                titleElem.innerHTML = title;
+                                titleElem.style.textDecoration = 'underline';
+                                titleElem.style.fontSize = '14pt';
+                                titleElem.style.width = '100%';
+                                titleElem.style.textAlign = 'center';
+                                historyInfoBox.appendChild(titleElem);
+                                historyInfoBox.appendChild(document.createElement("br"));
+
+
+                                // Bought stats
+                                const amountBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_bought');
+                                const totalPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_bought');
+                                const avgPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_bought');
+
+                                const totalBoughtElem = document.createElement("div");
+                                totalBoughtElem.innerHTML = 'Total bought: <span style="color: #FFCC00;">' + amountBought + '</span> ' + perNamer(amountBought) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceBought) + '</span>';
+                                
+                                historyInfoBox.appendChild(totalBoughtElem);
+                                const avgBuyPriceElem = document.createElement("div");
+                                
+                                avgBuyPriceElem.innerHTML = 'Average buy price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceBought) + '</span>';
+                                if (isAmmo) {
+                                    avgBuyPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceBought * stackSize) + '</span> per stack of ' + stackSize + ')';
+                                }
+
+                                historyInfoBox.appendChild(avgBuyPriceElem);
+                                historyInfoBox.appendChild(document.createElement("br"));
+
+                                // Sold stats
+                                const amountSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_sold');
+                                const totalPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_sold');
+                                const avgPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_sold');
+
+                                const totalSoldElem = document.createElement("div");
+                                totalSoldElem.innerHTML = 'Total sold: <span style="color: #FFCC00;">' + amountSold + '</span> ' + perNamer(amountSold) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceSold) + '</span>';
+                                
+                                historyInfoBox.appendChild(totalSoldElem);
+
+                                const avgSellPriceElem = document.createElement("div");
+                                avgSellPriceElem.innerHTML = 'Average sell price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceSold) + '</span>';
+                                if (isAmmo) {
+                                    avgSellPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceSold * stackSize) + '</span> per stack of ' + stackSize + ')';
+                                }
+
+                                historyInfoBox.appendChild(avgSellPriceElem);
+                                historyInfoBox.appendChild(document.createElement("br"));
+
+                                // Profit/Loss stats
+                                const averageProfit = avgPriceSold - avgPriceBought;
+                                const totalProfit = totalPriceSold - totalPriceBought;
+
+                                const averageProfitElem = document.createElement("div");
+                                const avgProfitColor = averageProfit >= 0 ? '#00FF00' : '#FF0000';
+                                averageProfitElem.innerHTML = 'Average profit/loss per ' + perNamer(1) + ': <span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit) + '</span>';
+
+                                if (isAmmo) {
+                                    averageProfitElem.innerHTML += ' (<span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit * stackSize) + '</span> per stack of ' + stackSize + ')';
+                                }
+
+                                historyInfoBox.appendChild(averageProfitElem);
+
+                                // const totalProfitOnSoldOnly = totalPriceSold - (avgPriceBought * amountSold);
+                                // const totalProfitOnBoughtOnly = totalPriceSold - (avgPriceBought * amountBought);
+
+                                // const totalProfitOnSoldOnlyElem = document.createElement("div");
+                                // const totalProfitOnSoldOnlyColor = totalProfitOnSoldOnly >= 0 ? '#00FF00' : '#FF0000';
+                                // totalProfitOnSoldOnlyElem.innerHTML = 'Total profit on sold only: <span style="color: ' + totalProfitOnSoldOnlyColor + ';">' + formatMoney(totalProfitOnSoldOnly) + '</span> (' + amountSold + ' ' + perName + (amountSold == 1 ? '' : 's') + ')';
+
+                                // historyInfoBox.appendChild(totalProfitOnSoldOnlyElem);
+
+                                const totalProfitItemCount = Math.min(amountSold, amountBought);
+                                let totalRelativeProfit = 0;
+
+                                if (totalProfitItemCount > 0) {
+                                    totalRelativeProfit = (totalProfitItemCount * avgPriceSold) - (totalProfitItemCount * avgPriceBought);
+                                }
+
+                                const totalRelativeProfitElem = document.createElement("div");
+                                const totalRelativeProfitColor = totalRelativeProfit >= 0 ? '#00FF00' : '#FF0000';
+                                totalRelativeProfitElem.innerHTML = 'Total relative profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys/sells)';
+
+                                historyInfoBox.appendChild(totalRelativeProfitElem);
+
+                                const totalProfitElem = document.createElement("div");
+                                const totalProfitColor = totalProfit >= 0 ? '#00FF00' : '#FF0000';
+                                totalProfitElem.innerHTML = 'Total profit/loss: <span style="color: ' + totalProfitColor + ';">' + formatMoney(totalProfit) + '</span> (Based on ' + amountBought + ' buys, ' + amountSold + ' sells)';
+
+                                historyInfoBox.appendChild(totalProfitElem);
+
+                            }
+
+
                             marketHolder.appendChild(filterBox);
                             marketHolder.appendChild(historyInfoBox);
 
-                            const searchFn = debouncedItemSearch();
-
-                            searchInput.addEventListener('input', function () {
-                                searchFn(this.value, function (results) {
-                                    searchResultBox.innerHTML = '';
-                                    for(const result of results) {
-                                        // const resultRow = document.createElement('div');
-
-                                        const resultButton = document.createElement('button');
-                                        resultButton.innerText = result.name;
-                                        resultButton.style.width = '100%';
-                                        resultButton.style.textAlign = 'left';
-                                        resultButton.classList.add("fakeItem");
-                                        resultButton.setAttribute("data-type", result.item);
-                                        resultButton.setAttribute("data-quantity", maxStack(result.item));
-            
-                                        resultButton.addEventListener('click', function () {
-                                            // searchInput.value = result.name;
-                                            // searchResultBox.innerHTML = '';
-                                        });
-                                        // resultRow.appendChild(resultButton);
-                                        // searchResultBox.appendChild(resultRow);
-                                        searchResultBox.appendChild(resultButton);
-                                    }
-
-                                    if (!results.length) {
-                                        searchResultBox.classList.add('hidden');
-                                    } else {
-                                        searchResultBox.classList.remove('hidden');
-                                    }
-                                });
-                            });
-                            searchInput.addEventListener('blur', function (e) {
-                                // Check if not focused on result box
-                                if (e.relatedTarget && e.relatedTarget.parentNode.id == 'historyItemSearchResultBox') {
-                                    return;
-                                }
-
-                                searchResultBox.classList.add('hidden');
-                            });
-                            searchInput.addEventListener('focus', function () {
-                                // If result box has results, show it
-                                if (searchResultBox.children.length) {
-                                    searchResultBox.classList.remove('hidden');
-                                }
-                            });
                             break;
                     }
                     
@@ -1834,7 +2362,7 @@
         unsafeWindow.infoCard = function (e) {
             // infoBox.style.color = '';
             
-            //Remove previous ironman warning
+            //Remove previous history info
             var elems = document.getElementsByClassName("historyInfoContainer");
             for(var i = elems.length - 1; i >= 0; i--) {
                 elems[i].parentNode.removeChild(elems[i]);
@@ -1842,6 +2370,10 @@
  
             origInfoCard(e);
             if(active || pageLock || !allowedInfoCard(e.target)) {
+                return;
+            }
+
+            if (!SETTINGS.values.hoverEnabled) {
                 return;
             }
  
@@ -1853,26 +2385,39 @@
             {
                 target = e.target;
             }
-            if (!target.dataset.type || !target.dataset.tradeId) {
-                return;
-            }
-            const tradeId = target.dataset.tradeId;
-            const isPending = HISTORY.cache.pending_trade_ids.includes(tradeId);
-            if (!isPending) {
-                return;
+         
+            if (target.classList.contains('pending')) {
+                const container = document.createElement('div');
+                // container.className = 'itemData historyInfoContainer';
+                container.classList.add('itemData');
+                container.classList.add('historyInfoContainer');
+                container.style.color = '#FFCC00';
+                container.style.marginTop = 'auto';
+                container.innerHTML = 'This sale is still pending';
+                infoBox.appendChild(container);
             }
 
-            const itemId = target.dataset.type.split('_')[0];
-            // const itemData = globalData[itemId] || null;
-            
-            const container = document.createElement("div");
-            // container.className = "itemData historyInfoContainer";
-            container.classList.add("itemData");
-            container.classList.add("historyInfoContainer");
-            container.style.color = '#FFCC00';
-            container.style.marginTop = 'auto';
-            container.innerHTML = "This sale is still pending";
-            infoBox.appendChild(container);
+            if (target.classList.contains('item')) {
+                const infoContainer = document.createElement('div');
+                infoContainer.classList.add('historyInfoContainer');
+
+                const amountBought = HISTORY.getItemInfo(target.dataset.type, 'amount_bought');
+                const totalPriceBought = HISTORY.getItemInfo(target.dataset.type, 'total_price_bought');
+                const avgPriceBought = HISTORY.getItemInfo(target.dataset.type, 'avg_price_bought');
+
+                const amountSold = HISTORY.getItemInfo(target.dataset.type, 'amount_sold');
+                const totalPriceSold = HISTORY.getItemInfo(target.dataset.type, 'total_price_sold');
+                const avgPriceSold = HISTORY.getItemInfo(target.dataset.type, 'avg_price_sold');
+
+                const averageProfit = avgPriceSold - avgPriceBought;
+                // infoContainer.innerHTML = `
+                //     This is a test
+                //     <br>
+                //     123 test
+                // `;
+                infoBox.appendChild(infoContainer);
+            }
+
         }.bind(unsafeWindow);
  
         inventoryHolder.addEventListener("mousemove", unsafeWindow.infoCard, false);
@@ -1932,8 +2477,6 @@
             dataObj[key.replace(/^df_inv\d+_/, '')] = response.dataObj[key];
         }
         
-        // const itemId = dataObj.type.split('_')[0];
-
         const entry = {
             trade_id: request.params.buynum,
             action: 'buy',
@@ -1960,7 +2503,6 @@
         const itemnum = request.params.itemnum;
         const quantity = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_quantity'];
         const itemTypeId = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_type'];
-        const itemId = itemTypeId.split('_')[0];
 
         const entry = {
             trade_id: hash(objectJoin(request.params)),
@@ -2048,8 +2590,9 @@
         });
     
     // Load History
-    await HISTORY.load();
+    await HISTORY.init();
     HISTORY.resetCache();
+    // HISTORY.initCache();
 
     // Load settings
     await SETTINGS.load();
