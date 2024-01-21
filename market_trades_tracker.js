@@ -25,10 +25,21 @@
         return;
     }
 
+    /**
+     * Detect if SilverScripts is installed
+     * 
+     * We only need to know this to render hover item info differently
+     * Because if SilverScripts is installed and its HoverPrices are enabled
+     * The hover info box can get cluttered and overflows, causing data to be hidden (Found out during testing)
+     * So if this is detected, a setting will appear to show our data only when the shift key is pressed
+     */
+    const silverScriptsInstalled = unsafeWindow.hasOwnProperty('silverRequestItem');
+
     /* === Global variables === */
     unsafeWindow.historyScreen = 'list'; // 'list', 'stats'
 
     // Will be set after page init (below script)
+    // Because DeadFrontier does a call to stackables.json, we need to wait for that to complete
     let SEARCHABLE_ITEMS = [];
 
     const TIMEFRAME_OPTIONS = {
@@ -43,6 +54,16 @@
         mtd: 'Since 1st of month',
         wtd: 'Since monday',
     };
+
+    const SHIFT_HOVER_OPTIONS = {
+        disabled: 'Disabled', // Just show everything
+        history: 'Enabled', // Show history info when shift is pressed
+    };
+
+    if (silverScriptsInstalled) {
+        SHIFT_HOVER_OPTIONS.history = 'History'; // Only show history info when shift is pressed
+        SHIFT_HOVER_OPTIONS.silverscripts = 'SilverScripts'; // Show SilverScripts HoverPrices when shift is pressed
+    }
 
     const WEBCALL_HOOKS = {
         before: {},
@@ -179,8 +200,10 @@
             const quantity = parseInt(entry.quantity);
 
             if (action === 'buy') {
+                // TODO: check date treshold?
                 this.cache.item_id__amount_bought[itemId] += quantity;
             } else if (action === 'sell') {
+                // TODO: check date treshold?
                 this.cache.item_id__amount_sold[itemId] += quantity;
             }
 
@@ -232,9 +255,20 @@
         },
 
         // Get info about an item, based on its trades
+        // Looks up the cache first, if not found, calculates it
         getItemInfo(itemId, key) {
             let cacheKey = 'item_id__' + key;
             let trades, total, action, amount, lastTradeId, lastTradePrice, lastTradeQuantity, lastTradeDate;
+            const isDateInTreshold = function (entry) {
+                const entryDate = entry.date;
+                const tresholdDate = getTresholdDateForTimeframe(SETTINGS.values.statisticsTimeframe);
+
+                if (tresholdDate === null) {
+                    return true;
+                }
+
+                return entryDate >= tresholdDate.getTime();
+            }
             switch (key) {
                 case 'amount_sold':
                 case 'amount_bought':
@@ -246,6 +280,10 @@
                     action = key == 'amount_sold' ? 'sell' : 'buy';
 
                     return this.cache[cacheKey][itemId] = trades.reduce((total, trade) => {
+                        if (!isDateInTreshold(trade)) {
+                            return total;
+                        }
+                        
                         let isAction = trade.action === action;
                         if (!isAction && SETTINGS.values.countScraps && action == 'sell') {
                             isAction = trade.action === 'scrap';
@@ -272,9 +310,15 @@
                     action = key == 'last_price_sold' ? 'sell' : 'buy';
 
                     lastTradeId = 0;
+                    lastTradeDate = 0;
                     lastTradePrice = 0;
 
+                    let tradeCount = 0;
+
                     for (const trade of trades) {
+                        if (!isDateInTreshold(trade)) {
+                            continue;
+                        }
                         let isAction = trade.action === action;
                         if (!isAction && SETTINGS.values.countScraps && action == 'sell') {
                             isAction = trade.action === 'scrap';
@@ -287,13 +331,18 @@
                             continue;
                         }
 
-                        //TODO: check date instead
-                        // if (trade.trade_id <= lastTradeId) {
-                        //     continue;
-                        // }
+                        if (trade.date <= lastTradeDate) {
+                            continue;
+                        }
 
+                        tradeCount++;
                         lastTradeId = trade.trade_id;
                         lastTradePrice = trade.price;
+                        lastTradeDate = trade.date;
+                    }
+
+                    if (tradeCount === 0) {
+                        return this.cache[cacheKey][itemId] = null;
                     }
                     
                     return this.cache[cacheKey][itemId] = lastTradePrice;
@@ -311,16 +360,21 @@
                     lastTradeQuantity = 0;
 
                     for (const trade of trades) {
+                        if (!isDateInTreshold(trade)) {
+                            continue;
+                        }
+
                         if (trade.action !== action) {
                             continue;
                         }
-                        if (trade.trade_id <= lastTradeId) {
+                        if (trade.date <= lastTradeDate) {
                             continue;
                         }
                         const tradeItemId = getGlobalDataItemId(trade.item);
 
                         lastTradeId = trade.trade_id;
                         lastTradeQuantity = realQuantity(trade.quantity, unsafeWindow.globalData[tradeItemId].itemcat);
+                        lastTradeDate = trade.date;
                     }
                     
                     return this.cache[cacheKey][itemId] = lastTradeQuantity;
@@ -338,10 +392,14 @@
                     lastTradeDate = 0;
 
                     for (const trade of trades) {
+                        if (!isDateInTreshold(trade)) {
+                            continue;
+                        }
+                        
                         if (trade.action !== action) {
                             continue;
                         }
-                        if (trade.trade_id <= lastTradeId) {
+                        if (trade.date <= lastTradeDate) {
                             continue;
                         }
 
@@ -386,6 +444,9 @@
                     trades = this.cache.item_id[itemId];
                     total = 0;
                     for (const trade of trades) {
+                        if (!isDateInTreshold(trade)) {
+                            continue;
+                        }
                         let isAction = trade.action === action;
                         if (!isAction && SETTINGS.values.countScraps && action == 'sell') {
                             isAction = trade.action === 'scrap';
@@ -442,9 +503,36 @@
 
         	unsafeWindow.prompt.style.height = "200px";
 
+            const imgItemId = getGlobalDataItemId(entry.item);
+            const imgUrl = 'https://files.deadfrontier.com/deadfrontier/inventoryimages/large/' + imgItemId + '.png';
             
-            unsafeWindow.prompt.innerHTML = '<div style="text-align: center; text-decoration: underline">Edit entry</div>';
-            unsafeWindow.prompt.innerHTML += '<br />';
+            unsafeWindow.prompt.innerHTML = `
+                <div style="text-align: center; text-decoration: underline;">Edit entry</div>
+                <div style="text-align: right; position: absolute; right: 0;"><img src="${imgUrl}" /></div>
+                <div style="z-index: 1000; position: relative;">
+                    <span style="text-decoration: underline;">Item:</span><br>
+                    ${entry.itemname} x${entry.quantity}
+                </div>
+                <br>
+                <div style="position: relative;">
+                    <div style="position: absolute;">
+                        <span style="text-decoration: underline;">Action:</span><br>
+                        <span style="color: #00FF00;">${entry.action}</span>
+                    </div>
+                    <div style="position: absolute; left: 100px;">
+                        <span style="text-decoration: underline;">Price:</span><br>
+                        ${formatMoneyHtml(entry.price, true)}
+                    </div>
+                    <br>
+                    <br>
+                </div>
+                <br>
+                <div>
+                    <span style="text-decoration: underline;">Datetime:</span><br>
+                    ${formatDate(new Date(entry.date))}
+                </div>
+            `;
+
 
             const historyEntryHolder = document.createElement("div");
             historyEntryHolder.id = "historyEntryHolder";
@@ -473,6 +561,43 @@
                 HISTORY.closeEntryPrompt();
             });
             unsafeWindow.prompt.appendChild(closeBtn);
+
+            const itemInfoBtn = document.createElement("button");
+            itemInfoBtn.style.position = "absolute";
+            itemInfoBtn.style.bottom = "12px";
+            itemInfoBtn.style.left = "100px";
+            itemInfoBtn.textContent = "item stats";
+            itemInfoBtn.addEventListener("click", () => {
+                HISTORY.closeEntryPrompt();
+                unsafeWindow.historyScreen = 'stats';
+                HISTORY.setSelectedItem(entry.item);
+                loadMarket();
+            });
+            unsafeWindow.prompt.appendChild(itemInfoBtn);
+
+            const removeBtn = document.createElement("button");
+            removeBtn.style.position = "absolute";
+            removeBtn.style.bottom = "12px";
+            removeBtn.style.left = "12px";
+            removeBtn.textContent = "remove";
+            removeBtn.addEventListener("click", async () => {
+                const confirmed = confirm('Are you sure you want to remove this entry?');
+                if (!confirmed) {
+                    return;
+                }
+
+                const removed = await HISTORY.removeTrade(entry.trade_id);
+                if (!removed) {
+                    alert('Could not remove entry');
+                    return;
+                }
+
+                HISTORY.closeEntryPrompt();
+                // HISTORY.resetCache();
+                loadMarket();
+            });
+
+            unsafeWindow.prompt.appendChild(removeBtn);
             
             unsafeWindow.prompt.parentNode.style.display = "block";
             unsafeWindow.prompt.focus();
@@ -865,7 +990,7 @@
                 elements: {
                     hoverSettings: {
                         type: 'button',
-                        title: '>>> Hover info settings',
+                        title: '>>  Hover info settings',
                         description: 'Settings for the hover info module.',
                         action() {
                             SETTINGS.renderSettingsPrompt('hoverSettings');
@@ -925,7 +1050,7 @@
                     defaultHistoryPage: {
                         title: 'Default page',
                         type: 'switch',
-                        description: 'The page that will be shown when opening the history tab.',
+                        description: 'The page that will be shown by default when opening the history tab.',
                         options: {
                             list: 'List',
                             stats: 'Statistics',
@@ -1023,6 +1148,25 @@
                             return !SETTINGS.values.hoverEnabled;
                         }
                     },
+                    shiftHoverMode: {
+                        title: 'Hold shift mode',
+                        type: 'switch',
+                        description() {
+                            if (SETTINGS.values.shiftHoverMode == 'disabled') {
+                                return 'Shift hover is disabled' + (silverScriptsInstalled ? ', both SilverScripts and History Data are shown without holding SHIFT.' : ', History Data is shown without holding SHIFT.');
+                            } else if (SETTINGS.values.shiftHoverMode == 'history') {
+                                return 'When SHIFT is held, History Data will only be shown' + (silverScriptsInstalled ? ', otherwise SilverScripts\' HoverPrices are shown.' : '.');
+                            } else if (SETTINGS.values.shiftHoverMode == 'silverscripts') {
+                                return 'When SHIFT is held, SilverScripts\' HoverPrices are only shown, otherwise History Data is shown.';
+                            }
+
+                            return '';
+                        },
+                        disabled() {
+                            return !SETTINGS.values.hoverEnabled;
+                        },
+                        options: SHIFT_HOVER_OPTIONS,
+                    },
                 },
                 footerButtons: [
                     {
@@ -1058,6 +1202,7 @@
             hoverLastSellPriceEnabled: true,
             hoverLastBuyPriceEnabled: true,
             hoverAvgProfitEnabled: true,
+            shiftHoverMode: silverScriptsInstalled ? 'history' : 'disabled', // 'disabled', 'history', 'silverscripts'
 
             defaultHistoryPage: 'list',
             statisticsTimeframe: 'all',
@@ -1085,6 +1230,10 @@
 
             // Merge values with default values
             this.values = mergeDeep(this.values, values);
+
+            if (!silverScriptsInstalled && this.values.shiftHoverMode == 'silverscripts') {
+                this.values.shiftHoverMode = 'disabled';
+            }
 
             unsafeWindow.historyScreen = this.values.defaultHistoryPage;
         },
@@ -1159,6 +1308,10 @@
         },
         _renderDescription(holder, descriptionText, pageInfo) {
             const strategy = pageInfo.descriptionStrategy || 'bottom';
+
+            if (typeof descriptionText === 'function') {
+                descriptionText = descriptionText();
+            }
 
             if (strategy == 'bottom') {
                 const descriptionElement = document.getElementById('historySettingsDescription');
@@ -1262,6 +1415,17 @@
                         const settingValue = this.values[settingKey];
                         const settingValueTitle = setting.options[settingValue];
                         switcher.innerText = setting.title + ': ' + settingValueTitle;
+
+                        if (typeof setting.disabled === 'function') {
+                            switcher.disabled = setting.disabled();
+                        }
+
+                        if (switcher.disabled) {
+                            buttonHolder.appendChild(switcher);
+                            holder.appendChild(buttonHolder);
+                            break;
+                        }
+
                         switcher.addEventListener('click', async () => {
                             const valueKeys = Object.keys(setting.options);
                             const valueIndex = valueKeys.indexOf(settingValue);
@@ -1306,6 +1470,37 @@
             }
         }
     };
+
+    const HOVER_INFOBOX_DATA = {
+        event: null,
+        run (shift=true) {
+            if (infoBox.style.visibility == 'hidden') {
+                // console.log('infoBox is hidden');
+                return;
+            }
+            if (!this.event) {
+                // console.log('no event');
+                return;
+            }
+            if (!SETTINGS.values.hoverEnabled) {
+                // console.log('hover info disabled');
+                return;
+            }
+            if (SETTINGS.values.shiftHoverMode == 'disabled') {
+                // console.log('shift hover mode disabled');
+                return;
+            }
+
+            Object.defineProperty(this.event, 'shiftKey', {
+                value: shift,
+                writable: false,
+                configurable: true,
+            });
+
+            unsafeWindow.infoCard(this.event);
+        },
+    };
+
 
     /******************************************************
      * Utility functions
@@ -1489,6 +1684,15 @@
 
     function formatMoney(num) {
         return (num < 0 ? '-' : '') + '$' + formatNumber(Math.abs(num));
+    }
+
+    function formatMoneyHtml(num, neutralColor = false) {
+        let color = '#FFCC00';
+        if (!neutralColor) {
+            color = num < 0 ? '#FF0000' : '#00FF00';
+        }
+
+        return '<span style="color: ' + color + '">' + formatMoney(num) + '</span>';
     }
 
     function historyAction(e) {
@@ -1965,7 +2169,7 @@
                             const historyResultsText = document.createElement("div");
                             historyResultsText.id = "historyResultsText";
                             historyResultsText.classList.add("opElem");
-                            historyResultsText.style.top = "90px";
+                            historyResultsText.style.top = "150px";
                             historyResultsText.style.right = "20px";
                             // historyResultsText.style.width = "100%";
                             historyResultsText.innerText = historyEntries.length + ' result' + (historyEntries.length == 1 ? '' : 's');
@@ -2212,7 +2416,7 @@
 
                                 const totalRelativeProfitElem = document.createElement("div");
                                 const totalRelativeProfitColor = totalRelativeProfit >= 0 ? '#00FF00' : '#FF0000';
-                                totalRelativeProfitElem.innerHTML = 'Total relative profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys/sells)';
+                                totalRelativeProfitElem.innerHTML = 'Total relative profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys & sells)';
 
                                 historyInfoBox.appendChild(totalRelativeProfitElem);
 
@@ -2355,6 +2559,21 @@
         return originalWebCall.call(unsafeWindow, call, params, callbackWithHooks, hashed);
     };
 
+    const origAllowedInfoCard = unsafeWindow.allowedInfoCard;
+    unsafeWindow.allowedInfoCard = function (elem) {
+        if(elem && typeof elem.classList !== "undefined" && (elem.classList.contains("item") || elem.classList.contains("fakeItem") || elem.parentNode?.classList.contains("fakeItem")))
+        {
+            return true;
+        } else
+        {
+            return false;
+        }
+    }
+    
+    // Source: inventory.js
+    // Explanation:
+    // Allows this script to hook into the infoCard function, which is used to display item info when hovering over an item
+    // This approach makes it still compatible with SilverScript's HoverPrices
     var origInfoCard = unsafeWindow.infoCard || null;
     if (origInfoCard) {
         inventoryHolder.removeEventListener("mousemove", origInfoCard, false);
@@ -2363,17 +2582,18 @@
             // infoBox.style.color = '';
             
             //Remove previous history info
-            var elems = document.getElementsByClassName("historyInfoContainer");
+            let elems = document.getElementsByClassName("historyInfoContainer");
             for(var i = elems.length - 1; i >= 0; i--) {
                 elems[i].parentNode.removeChild(elems[i]);
             }
- 
-            origInfoCard(e);
-            if(active || pageLock || !allowedInfoCard(e.target)) {
-                return;
+            elems = document.getElementsByClassName("historyShiftNotice");
+            for(var i = elems.length - 1; i >= 0; i--) {
+                elems[i].parentNode.removeChild(elems[i]);
             }
 
-            if (!SETTINGS.values.hoverEnabled) {
+            // Call the original infoCard function
+            origInfoCard(e);
+            if(active || pageLock || !allowedInfoCard(e.target)) {
                 return;
             }
  
@@ -2385,7 +2605,12 @@
             {
                 target = e.target;
             }
-         
+            
+            // if (!wasHidden) {
+            //     return;
+            // }
+            
+            // Used in the history tab
             if (target.classList.contains('pending')) {
                 const container = document.createElement('div');
                 // container.className = 'itemData historyInfoContainer';
@@ -2397,24 +2622,120 @@
                 infoBox.appendChild(container);
             }
 
-            if (target.classList.contains('item')) {
+            if (target.classList.contains('item') && SETTINGS.values.hoverEnabled) {
+                HOVER_INFOBOX_DATA.event = e;
+
+                if (SETTINGS.values.shiftHoverMode !== 'disabled') {
+                    const shiftHoverStyle = document.createElement('style');
+                    shiftHoverStyle.classList.add('historyInfoContainer'); // Will be removed when infoCard is called again
+                    if (SETTINGS.values.shiftHoverMode == 'history') {
+                        const classNameToHide = e.shiftKey ? 'silverStats' : 'historyData';
+                        shiftHoverStyle.innerHTML = '.' + classNameToHide + ' { display: none; }';
+                    }
+                    if (SETTINGS.values.shiftHoverMode == 'silverscripts') {
+                        const classNameToHide = e.shiftKey ? 'historyData' : 'silverStats';
+                        shiftHoverStyle.innerHTML = '.' + classNameToHide + ' { display: none; }';
+                    }
+                    infoBox.appendChild(shiftHoverStyle);
+                }
+
                 const infoContainer = document.createElement('div');
+                const isAmmo = target.dataset.itemtype == 'ammo';
+                const item = target.dataset.type;
+                const quantity = parseInt(target.dataset.quantity);
                 infoContainer.classList.add('historyInfoContainer');
+                infoContainer.classList.add('itemData');
+                infoContainer.classList.add('historyData');
+                let infoText = '';
 
-                const amountBought = HISTORY.getItemInfo(target.dataset.type, 'amount_bought');
-                const totalPriceBought = HISTORY.getItemInfo(target.dataset.type, 'total_price_bought');
-                const avgPriceBought = HISTORY.getItemInfo(target.dataset.type, 'avg_price_bought');
+                const perNamer = function (amount) {
+                    let perName = 'unit';
+                    if (isAmmo) {
+                        perName = 'round';
+                    }
 
-                const amountSold = HISTORY.getItemInfo(target.dataset.type, 'amount_sold');
-                const totalPriceSold = HISTORY.getItemInfo(target.dataset.type, 'total_price_sold');
-                const avgPriceSold = HISTORY.getItemInfo(target.dataset.type, 'avg_price_sold');
+                    if (item == 'fuelammo') {
+                        return 'mL';
+                    }
 
-                const averageProfit = avgPriceSold - avgPriceBought;
-                // infoContainer.innerHTML = `
-                //     This is a test
-                //     <br>
-                //     123 test
-                // `;
+                    return perName + (amount == 1 ? '' : 's');
+                };
+                
+                if (SETTINGS.values.hoverAvgBuyPriceEnabled) {
+                    const avgPriceBought = HISTORY.getItemInfo(target.dataset.type, 'avg_price_bought');
+                    infoText += 'Average buy price: ' + formatMoneyHtml(avgPriceBought, true) + '/' + perNamer(1);
+                    if (isAmmo) {
+                        infoText += ', ' + formatMoneyHtml(avgPriceBought * quantity, true) + '/stack(' + quantity + ')';
+                    }
+                    infoText += '<br>';
+                }
+                if (SETTINGS.values.hoverAvgSellPriceEnabled) {
+                    const avgPriceSold = HISTORY.getItemInfo(target.dataset.type, 'avg_price_sold');
+                    infoText += 'Average sell price: ' + formatMoneyHtml(avgPriceSold, true) + '/' + perNamer(1);
+                    if (isAmmo) {
+                        infoText += ', ' + formatMoneyHtml(avgPriceSold * quantity, true) + '/stack(' + quantity + ')';
+                    }
+                    infoText += '<br>';
+                }
+                if (SETTINGS.values.hoverAmountBoughtEnabled) {
+                    const amountBought = HISTORY.getItemInfo(target.dataset.type, 'amount_bought');
+                    infoText += 'Amount bought: ' + amountBought + '<br>';
+                }
+                if (SETTINGS.values.hoverAmountSoldEnabled) {
+                    const amountSold = HISTORY.getItemInfo(target.dataset.type, 'amount_sold');
+                    infoText += 'Amount sold: ' + amountSold + '<br>';
+                }
+                if (SETTINGS.values.hoverLastBuyPriceEnabled) {
+                    const lastBuyPrice = HISTORY.getItemInfo(target.dataset.type, 'last_price_bought');
+                    if (isAmmo) {
+                        const lastBuyQuantity = HISTORY.getItemInfo(target.dataset.type, 'last_quantity_bought');
+                        const lastBuyPerRound = lastBuyPrice === null ? null : (lastBuyPrice / lastBuyQuantity);
+                        const lastBuyPerStack = lastBuyPrice === null ? null : (lastBuyPerRound * quantity);
+                        infoText += 'Last bought for: ' + (lastBuyPerRound === null ? 'Never bought' : formatMoneyHtml(lastBuyPerRound, true) + '/round, ' + formatMoneyHtml(lastBuyPerStack, true) + '/stack(' + quantity + ')') + '<br>';
+                    } else {
+                        infoText += 'Last bought for: ' + (lastBuyPrice === null ? 'Never bought' : formatMoneyHtml(lastBuyPrice, true)) + '<br>';
+                    }
+                }
+                if (SETTINGS.values.hoverLastSellPriceEnabled) {
+                    const lastSellPrice = HISTORY.getItemInfo(target.dataset.type, 'last_price_sold');
+                    if (isAmmo) {
+                        const lastSellQuantity = HISTORY.getItemInfo(target.dataset.type, 'last_quantity_sold');
+                        const lastSellPerRound = lastSellPrice === null ? null : (lastSellPrice / lastSellQuantity);
+                        const lastSellPerStack = lastSellPrice === null ? null : (lastSellPerRound * quantity);
+                        infoText += 'Last sold for: ' + (lastSellPerRound === null ? 'Never sold' : formatMoneyHtml(lastSellPerRound, true) + '/round, ' + formatMoneyHtml(lastSellPerStack, true) + '/stack(' + quantity + ')') + '<br>';
+                    } else {
+                        infoText += 'Last sold for: ' + (lastSellPrice === null ? 'Never sold' : formatMoneyHtml(lastSellPrice, true)) + '<br>';
+                    }
+                }
+                if (SETTINGS.values.hoverAvgProfitEnabled) {
+                    const avgPriceSold = HISTORY.getItemInfo(target.dataset.type, 'avg_price_sold');
+                    const avgPriceBought = HISTORY.getItemInfo(target.dataset.type, 'avg_price_bought');
+                    const avgProfit = avgPriceSold - avgPriceBought;
+                    infoText += 'Average profit/loss: ' + formatMoneyHtml(avgProfit, false) + '/' + perNamer(1);
+                    if (isAmmo) {
+                        const avgProfitStack = avgProfit * quantity;
+                        infoText += ', ' + formatMoneyHtml(avgProfitStack, false) + '/stack(' + quantity + ')';
+                    }
+                    infoText += '<br>';
+                }
+                
+
+                if (infoText.trim()) {
+                    infoText = '<div style="text-decoration: underline; text-align: center;">History Data</div>' + infoText;
+                }
+
+                if (SETTINGS.values.hoverEnabled && SETTINGS.values.shiftHoverMode == 'silverscripts' && !e.shiftKey && silverScriptsInstalled) {
+                    infoText += '<div style="text-decoration: underline; font-size: 8pt;">Hold SHIFT to show SilverScript\'s HoverPrices</div>'
+                }
+                if (SETTINGS.values.hoverEnabled && SETTINGS.values.shiftHoverMode == 'history' && !e.shiftKey) {
+                    const historyShiftNotice = document.createElement('div');
+                    historyShiftNotice.classList.add('historyShiftNotice');
+                    historyShiftNotice.innerHTML = '<div style="text-decoration: underline; font-size: 8pt;">Hold SHIFT to show History Data</div>'
+
+                    infoBox.appendChild(historyShiftNotice);
+                }
+
+                infoContainer.innerHTML = infoText;
                 infoBox.appendChild(infoContainer);
             }
 
@@ -2643,6 +2964,28 @@
 
         fn();
     });
+
+    const onShiftRelease = function (event) {
+        if (event.key != 'Shift') {
+            return;
+        }
+
+        // console.log('shift hover mode: ' + SETTINGS.values.shiftHoverMode);
+        HOVER_INFOBOX_DATA.run(false);
+
+        unsafeWindow.document.removeEventListener('keyup', onShiftRelease);
+    };
+
+    unsafeWindow.document.addEventListener('keydown', function (event) {
+        if (event.key != 'Shift') {
+            return;
+        }
+
+        // console.log('shift hover mode: ' + SETTINGS.values.shiftHoverMode);
+        HOVER_INFOBOX_DATA.run(true);
+        unsafeWindow.document.addEventListener('keyup', onShiftRelease);
+    });
+
 
 
     // onAfterWebCall(null, function (request, response, result) {
