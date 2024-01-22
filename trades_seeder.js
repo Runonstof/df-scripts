@@ -1,14 +1,24 @@
 async function genTrades(amount) {
+    HISTORY.debugMode(true);
     const itemIds = Object.keys(globalData)
-    .filter(key => {
-        if (key == 'undefined' || key == 'broken') return false;
+        .filter(key => {
+            if (key == 'undefined' || key == 'broken') return false;
 
-        var data = globalData[key];
+            var data = globalData[key];
 
-        if (data['no_transfer'] == '1' || data['noloot'] == '1') return false;
+            if (data['no_transfer'] == '1' || data['noloot'] == '1') return false;
 
-        return true;
-    });
+            return true;
+        });
+
+        itemIds.forEach(itemId => {
+            const item = globalData[itemId];
+            if (!item.needcook || item.needcook != '1') {
+                return;
+            }
+
+            itemIds.push(itemId + '_cooked');
+        });
     // const itemIds = {
     //     '9rifleammo': {
     //         minPrice: 16000,
@@ -68,7 +78,7 @@ async function genTrades(amount) {
             trade_id: tradeId,
             item: itemId,
             itemname: itemNamer(itemId, quantity),
-            price: price,
+            price: Math.round(price),
             quantity: quantity,
             date: randTimestamp,
             action: tradeType,
@@ -86,4 +96,7 @@ async function genTrades(amount) {
         await HISTORY.pushTrade(entries[i]);
         console.log('Pushing: ' + i + '/' + amount);
     }
+
+    HISTORY.debugMode(false);
+    await HISTORY.forceSave();
 }

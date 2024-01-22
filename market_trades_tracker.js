@@ -37,6 +37,7 @@
 
     /* === Global variables === */
     unsafeWindow.historyScreen = 'list'; // 'list', 'stats'
+    unsafeWindow.historyScreenSet = false;
 
     // Will be set after page init (below script)
     // Because DeadFrontier does a call to stackables.json, we need to wait for that to complete
@@ -173,7 +174,7 @@
 
             await this.load();
             this.entries.push(entry);
-            await GM.setValue(this.storageKey('entries'), this.entries);
+            await this.forceSave();
 
             this.cache.trade_id[entry.trade_id] = entry;
 
@@ -221,7 +222,7 @@
             const entry = this.entries[index];
 
             this.entries.splice(index, 1);
-            await GM.setValue(this.storageKey('entries'), this.entries);
+            await this.forceSave();
 
             // Update cache
             delete this.cache.trade_id[tradeId];
@@ -256,12 +257,12 @@
 
         // Get info about an item, based on its trades
         // Looks up the cache first, if not found, calculates it
-        getItemInfo(itemId, key) {
+        getItemInfo(itemId, key, timeframe = undefined) {
             let cacheKey = 'item_id__' + key;
             let trades, total, action, amount, lastTradeId, lastTradePrice, lastTradeQuantity, lastTradeDate;
             const isDateInTreshold = function (entry) {
                 const entryDate = entry.date;
-                const tresholdDate = getTresholdDateForTimeframe(SETTINGS.values.statisticsTimeframe);
+                const tresholdDate = getTresholdDateForTimeframe(SETTINGS.values.hoverStatisticsTimeframe);
 
                 if (tresholdDate === null) {
                     return true;
@@ -347,6 +348,7 @@
                     
                     return this.cache[cacheKey][itemId] = lastTradePrice;
                     break;
+
                 case 'last_quantity_sold':
                 case 'last_quantity_bought':
                     if (this.cache[cacheKey].hasOwnProperty(itemId)) {
@@ -379,6 +381,7 @@
                     
                     return this.cache[cacheKey][itemId] = lastTradeQuantity;
                     break;
+
                 case 'last_date_sold':
                 case 'last_date_bought':
                     if (this.cache[cacheKey].hasOwnProperty(itemId)) {
@@ -428,6 +431,7 @@
 
                     return this.cache[cacheKey][itemId] = total / amount;
                     break;
+
                 case 'total_price_sold':
                 case 'total_price_bought':
                     if (this.cache[cacheKey].hasOwnProperty(itemId)) {
@@ -460,6 +464,7 @@
 
                     return this.cache[cacheKey][itemId] = total;
                     break;
+
                 case 'avg_stack_price_sold':
                 case 'avg_stack_price_bought':
                     const avgPrice = this.getItemInfo(itemId, key.replace('avg_stack_price', 'avg_price')); // avg_price_sold or avg_price_bought
@@ -469,12 +474,15 @@
                     return avgPrice * stack;
                     break;
             }
+
             throw new Error('Invalid key: ' + key);
         },
         
 
-        // Called during debugging
         async forceSave() {
+            if (this._debugMode) {
+                return;
+            }
             await GM.setValue(this.storageKey('entries'), this.entries);
         },
         // Called during debugging
@@ -492,7 +500,19 @@
             await this.load();
         },
         async load() {
+            if (this._debugMode) {
+                return;
+            }
             this.entries = await GM.getValue(this.storageKey('entries'), []);
+        },
+        _debugMode: false,
+        debugMode(mode = null) {
+            if (mode === null) {
+                this.debugMode(!this._debugMode);
+                return;
+            }
+
+            this._debugMode = mode;
         },
 
         renderEntryPrompt(entry) {
@@ -1006,11 +1026,13 @@
                     //     description: 'Show last sell/buy price and date on item hover',
                     //     type: 'checkbox',
                     // },
-                    autoFillBreakEvenPrice: {
-                        title: 'Auto fill price',
-                        type: 'checkbox',
-                        description: 'When selling an item, the price will be automatically filled in with the average sell price in the set timeframe.',
-                    },
+                    
+
+                    // autoFillBreakEvenPrice: {
+                    //     title: 'Auto fill price',
+                    //     type: 'checkbox',
+                    //     description: 'When selling an item, the price will be automatically filled in with the average sell price in the set timeframe.',
+                    // },
                     countPendingTrades: {
                         title: 'Calculate with pending',
                         type: 'checkbox',
@@ -1027,7 +1049,7 @@
                         },
                         description: 'When calculating statistics, scraps will be taken into account, if changed, you might have to reload statistics screen.',
                     },
-                    statisticsTimeframe: {
+                    hoverStatisticsTimeframe: {
                         title: 'Timeframe',
                         // type: 'timeframeselect',
                         type: 'switch',
@@ -1205,7 +1227,7 @@
             shiftHoverMode: silverScriptsInstalled ? 'history' : 'disabled', // 'disabled', 'history', 'silverscripts'
 
             defaultHistoryPage: 'list',
-            statisticsTimeframe: 'all',
+            hoverStatisticsTimeframe: 'all',
             clearHistoryTimeframe: 'all',
 
             // If true, the script will automatically fill in the price when selling an item
@@ -1235,7 +1257,10 @@
                 this.values.shiftHoverMode = 'disabled';
             }
 
-            unsafeWindow.historyScreen = this.values.defaultHistoryPage;
+            if (!unsafeWindow.historyScreenSet) {
+                unsafeWindow.historyScreen = this.values.defaultHistoryPage;
+                unsafeWindow.historyScreenSet = true;
+            }
         },
         async save() {
             await GM.setValue('SETTINGS_values', this.values);
@@ -1257,6 +1282,11 @@
             pageLock = false;
 			unsafeWindow.prompt.classList.remove("warning");
 			unsafeWindow.prompt.classList.remove("redhighlight");
+
+            console.log('reloading market:' + unsafeWindow.marketScreen + ' ' + unsafeWindow.historyScreen);
+            if (unsafeWindow.marketScreen == 'history' && unsafeWindow.historyScreen == 'stats') {
+                unsafeWindow.loadMarket();
+            }
         },
         renderSettingsPrompt(page = 'main') {
             pageLock = true;
@@ -1426,16 +1456,24 @@
                             break;
                         }
 
-                        switcher.addEventListener('click', async () => {
+                        switcher.addEventListener('click', async e => {
                             const valueKeys = Object.keys(setting.options);
                             const valueIndex = valueKeys.indexOf(settingValue);
-                            const nextValueIndex = valueIndex + 1 >= valueKeys.length ? 0 : valueIndex + 1;
+                            let nextValueIndex = 0;
+                            if (e.shiftKey) {
+                                nextValueIndex = valueIndex - 1 < 0 ? valueKeys.length - 1 : valueIndex - 1;
+                            } else {
+                                nextValueIndex = valueIndex + 1 >= valueKeys.length ? 0 : valueIndex + 1;
+                            }
                             const nextValue = valueKeys[nextValueIndex];
                             await self.set(settingKey, nextValue);
                             if (setting.meta) {
                                 if (setting.meta.resetCache) {
                                     HISTORY.resetCache();
                                 }
+                            }
+                            if (typeof setting.afterSaving === 'function') {
+                                setting.afterSaving();
                             }
                             self._renderUi(holder, page);
                         });
@@ -1704,7 +1742,7 @@
             case 'switchHistory':
                 unsafeWindow.prompt.innerHTML = "<div style='text-align: center'>Loading, please wait...</div>";
                 unsafeWindow.prompt.parentNode.style.display = "block";
-                historyScreen = e.target.dataset.page;
+                unsafeWindow.historyScreen = e.target.dataset.page;
                 loadMarket();
                 return;
                 break;
@@ -1857,6 +1895,16 @@
         return tresholdDate;
     }
 
+    function ready() {
+        return new Promise(resolve => {
+            if (document.readyState === "complete" || document.readyState === "interactive") {
+                resolve();
+            } else {
+                document.addEventListener("DOMContentLoaded", resolve);
+            }
+        });
+    }
+
     /******************************************************
      * Styles
      ******************************************************/
@@ -1949,6 +1997,8 @@
                 position: 'absolute',
                 top: '50%',
                 left: '50%',
+                width: '100%',
+                textAlign: 'center',
                 transform: 'translateY(-50%) translateX(-50%)',
             }
         },
@@ -2297,8 +2347,8 @@
                         case 'stats':
                             statsBtn.disabled = true;
 
-                            const filterBox = document.createElement("div");
-                            filterBox.id = "historyFilterArea";
+                            // const filterBox = document.createElement("div");
+                            // filterBox.id = "historyFilterArea";
                             // Filter box shows items that are added to search on
                             // But also a date range select
                             // filterBox.innerHTML =
@@ -2332,7 +2382,7 @@
                                 };
 
                                 // Title with timeframe
-                                const timeframe = SETTINGS.values.statisticsTimeframe;
+                                const timeframe = SETTINGS.values.hoverStatisticsTimeframe;
                                 const timeframeName = TIMEFRAME_OPTIONS[timeframe];
 
                                 const title = 'Statistics ' + timeframeName.toLowerCase();
@@ -2416,7 +2466,7 @@
 
                                 const totalRelativeProfitElem = document.createElement("div");
                                 const totalRelativeProfitColor = totalRelativeProfit >= 0 ? '#00FF00' : '#FF0000';
-                                totalRelativeProfitElem.innerHTML = 'Total relative profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys & sells)';
+                                totalRelativeProfitElem.innerHTML = 'Total average profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys & sells)';
 
                                 historyInfoBox.appendChild(totalRelativeProfitElem);
 
@@ -2425,11 +2475,40 @@
                                 totalProfitElem.innerHTML = 'Total profit/loss: <span style="color: ' + totalProfitColor + ';">' + formatMoney(totalProfit) + '</span> (Based on ' + amountBought + ' buys, ' + amountSold + ' sells)';
 
                                 historyInfoBox.appendChild(totalProfitElem);
+                                historyInfoBox.appendChild(document.createElement("br"));
 
+                                const lastBoughtElem = document.createElement("div");
+                                const lastBoughtAt = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_date_bought');
+                                const lastBoughtFor = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_price_bought');
+                                if (lastBoughtAt !== null && lastBoughtFor !== null) {
+                                    lastBoughtElem.innerHTML = 'Last bought at: <span style="color: #FFCC00;">' + formatDate(new Date(lastBoughtAt)) + '</span> for <span style="color: #FFCC00;">' + formatMoney(lastBoughtFor) + '</span>';
+                                } else {
+                                    lastBoughtElem.innerHTML = 'Last bought at: <span style="color: #FFCC00;">Never bought</span>';
+                                }
+                                historyInfoBox.appendChild(lastBoughtElem);
+
+                                const lastSoldElem = document.createElement("div");
+                                const lastSoldAt = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_date_sold');
+                                const lastSoldFor = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_price_sold');
+                                if (lastSoldAt !== null && lastSoldFor !== null) {
+                                    lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">' + formatDate(new Date(lastSoldAt)) + '</span> for <span style="color: #FFCC00;">' + formatMoney(lastSoldFor) + '</span>';
+                                } else {
+                                    lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">Never sold</span>';
+                                }
+
+                                historyInfoBox.appendChild(lastSoldElem);
+
+
+                            } else {
+                                historyInfoBox.innerHTML = `
+                                    <div class="historyDetailsContainer">
+                                        <div class="historyDetailsText">Search for an item to see its statistics</div>
+                                    </div>
+                                `;
                             }
 
 
-                            marketHolder.appendChild(filterBox);
+                            // marketHolder.appendChild(filterBox);
                             marketHolder.appendChild(historyInfoBox);
 
                             break;
@@ -2559,6 +2638,7 @@
         return originalWebCall.call(unsafeWindow, call, params, callbackWithHooks, hashed);
     };
 
+    // Bugfix for DeadFrontier code
     const origAllowedInfoCard = unsafeWindow.allowedInfoCard;
     unsafeWindow.allowedInfoCard = function (elem) {
         if(elem && typeof elem.classList !== "undefined" && (elem.classList.contains("item") || elem.classList.contains("fakeItem") || elem.parentNode?.classList.contains("fakeItem")))
@@ -2744,6 +2824,13 @@
         inventoryHolder.addEventListener("mousemove", unsafeWindow.infoCard, false);
     }
 
+    // Source: market.js
+    var origSellMenuItemPopulate = unsafeWindow.SellMenuItemPopulate;
+    unsafeWindow.SellMenuItemPopulate = function (itemElem) {
+        console.log('a', itemElem);
+        // Call original function
+        origSellMenuItemPopulate(itemElem);
+    };
 
     /******************************************************
      * Webcall hooks
@@ -2964,6 +3051,11 @@
 
         fn();
     });
+
+    await ready();
+
+    document.getElementById("invController").removeEventListener("contextmenu", unsafeWindow.openSellContextMenu, false);
+    document.getElementById("invController").addEventListener("contextmenu", unsafeWindow.openSellContextMenu, false);
 
     const onShiftRelease = function (event) {
         if (event.key != 'Shift') {
