@@ -211,6 +211,12 @@
             this.clearCacheForItem(itemId);
         },
 
+        async sortEntries() {
+            await this.load();
+            this.entries.sort((a, b) => (a.date > b.date) ? 1 : -1);
+            await this.forceSave();
+        },
+
         // Remove trade from history
         async removeTrade(tradeId) {
             await this.load();
@@ -531,7 +537,7 @@
                 <div style="text-align: right; position: absolute; right: 0;"><img src="${imgUrl}" /></div>
                 <div style="z-index: 1000; position: relative;">
                     <span style="text-decoration: underline;">Item:</span><br>
-                    ${entry.itemname} x${entry.quantity}
+                    ${entry.itemname}${entry.item == 'credits' ? '' : ` x${entry.quantity}`}
                 </div>
                 <br>
                 <div style="position: relative;">
@@ -605,7 +611,8 @@
                 if (!confirmed) {
                     return;
                 }
-
+                
+                unsafeWindow.prompt.innerHTML = "<div style='text-align: center'>Loading, please wait...</div>";
                 const removed = await HISTORY.removeTrade(entry.trade_id);
                 if (!removed) {
                     alert('Could not remove entry');
@@ -618,6 +625,250 @@
             });
 
             unsafeWindow.prompt.appendChild(removeBtn);
+
+            const editBtn = document.createElement("button");
+            editBtn.style.position = "absolute";
+            editBtn.style.bottom = "30px";
+            editBtn.style.left = "12px";
+            editBtn.textContent = "edit";
+            editBtn.addEventListener("click", async () => {
+                HISTORY.renderEntryFormPrompt(entry);
+
+                // const confirmed = confirm('Are you sure you want to remove this entry?');
+                // if (!confirmed) {
+                //     return;
+                // }
+
+                // const removed = await HISTORY.removeTrade(entry.trade_id);
+                // if (!removed) {
+                //     alert('Could not remove entry');
+                //     return;
+                // }
+
+                // HISTORY.closeEntryPrompt();
+                // // HISTORY.resetCache();
+                // loadMarket();
+            });
+
+            unsafeWindow.prompt.appendChild(editBtn);
+            
+            unsafeWindow.prompt.parentNode.style.display = "block";
+            unsafeWindow.prompt.focus();
+
+        },
+        renderEntryFormPrompt(entry) {
+            pageLock = true;
+
+
+			unsafeWindow.prompt.classList.remove("warning");
+			unsafeWindow.prompt.classList.remove("redhighlight");
+
+        	unsafeWindow.prompt.style.height = "200px";
+
+            const imgItemId = getGlobalDataItemId(entry.item);
+            const imgUrl = 'https://files.deadfrontier.com/deadfrontier/inventoryimages/large/' + imgItemId + '.png';
+
+            
+            const itemData = unsafeWindow.globalData[imgItemId];
+            if (!entry.itemname) {
+                entry.itemname = unsafeWindow.itemNamer(entry.item, '');
+            }
+            
+            const maxQuantity = maxStack(entry.item, true);
+
+            unsafeWindow.prompt.innerHTML = `
+                <div class="historyEntryForm">
+                    <div style="text-align: center; text-decoration: underline;">${entry.trade_id ? 'Edit' : 'Create'} entry</div>
+                    <div style="text-align: right; position: absolute; right: 0;"><img src="${imgUrl}" /></div>
+                    <div style="z-index: 1000; position: relative;">
+                        <span style="text-decoration: underline;">Item:</span><br>
+                        ${entry.itemname}
+                        <br>
+                        <input type="number" min="1" max="${maxQuantity}" placeholder="Quantity" style="width: 50px;" id="entryFormQuantity" value="${entry.quantity || maxQuantity}" />
+                    </div>
+                    <br>
+                    <div style="position: relative;">
+                        <div style="position: absolute;">
+                            <span style="text-decoration: underline;">Action:</span><br>
+
+                            <div data-value="${entry.action || 'buy'}" id="entryFormAction" class="historySelectComponent">
+                                <div class="selectChoice">
+                                    <span></span>
+                                    <span></span>
+                                </div>
+                                <div class="selectList">
+                                    <div data-value="buy" class="selectOption">Buy</div>
+                                    <div data-value="sell" class="selectOption">Sell</div>
+                                    <div data-value="scrap" class="selectOption">Scrap</div>
+                                </div>
+                            </div>
+
+                        </div>
+                        <div style="position: absolute; left: 100px;">
+                            <span style="text-decoration: underline;">Price:</span><br>
+                            <span style="color: #FFCC00;">$</span>&nbsp;<input type="number" min="1" max="9999999999" placeholder="Price" style="width: 50px;" id="entryFormPrice" value="${entry.price}" />
+                        </div>
+                        <br>
+                        <br>
+                    </div>
+                    <br>
+                    <div>
+                        <span style="text-decoration: underline;">Datetime:</span><br>
+                        <input type="datetime-local" id="entryFormDate" value="${formatDate(new Date(entry.date || Date.now()))}" />
+                    </div>
+                </div>
+            `;
+
+            initHistorySelects();
+
+
+            const historyEntryHolder = document.createElement("div");
+            historyEntryHolder.id = "historyEntryHolder";
+
+            
+            // const footerButton = document.createElement("button");
+            // footerButton.style.position = "absolute";
+            // footerButton.style.bottom = "12px";
+            // if (footerButtonInfo.action) {
+            //     footerButton.addEventListener("click", footerButtonInfo.action);
+            // }
+
+            // footerButton.textContent = footerButtonInfo.label;
+            
+            // for(const styleKey in footerButtonInfo.style) {
+            //     footerButton.style[styleKey] = footerButtonInfo.style[styleKey];
+            // }
+            // unsafeWindow.prompt.appendChild(footerButton);
+
+            const closeBtn = document.createElement("button");
+            closeBtn.style.position = "absolute";
+            closeBtn.style.bottom = "12px";
+            closeBtn.style.right = "12px";
+            closeBtn.textContent = "cancel";
+            closeBtn.addEventListener("click", () => {
+                HISTORY.closeEntryPrompt();
+            });
+            unsafeWindow.prompt.appendChild(closeBtn);
+
+            // const itemInfoBtn = document.createElement("button");
+            // itemInfoBtn.style.position = "absolute";
+            // itemInfoBtn.style.bottom = "12px";
+            // itemInfoBtn.style.left = "100px";
+            // itemInfoBtn.textContent = "item stats";
+            // itemInfoBtn.addEventListener("click", () => {
+            //     HISTORY.closeEntryPrompt();
+            //     unsafeWindow.historyScreen = 'stats';
+            //     HISTORY.setSelectedItem(entry.item);
+            //     loadMarket();
+            // });
+            // unsafeWindow.prompt.appendChild(itemInfoBtn);
+
+            const saveBtn = document.createElement("button");
+            saveBtn.style.position = "absolute";
+            saveBtn.style.bottom = "12px";
+            saveBtn.style.left = "12px";
+            saveBtn.textContent = entry.trade_id ? "save" : "add";
+            saveBtn.addEventListener("click", async () => {
+                if (saveBtn.disabled) {
+                    return;
+                }
+
+                // validate and parse values
+                const quantity = parseInt(document.getElementById('entryFormQuantity').value);
+                const price = parseInt(document.getElementById('entryFormPrice').value);
+                const date = new Date(document.getElementById('entryFormDate').value);
+                const action = document.getElementById('entryFormAction').dataset.value;
+
+                if (isNaN(quantity) || quantity < 1 || quantity > maxQuantity) {
+                    alert('Invalid quantity, max is ' + maxQuantity);
+                    return;
+                }
+
+                if (isNaN(price) || price < 1 || price > 9999999999) {
+                    alert('Invalid price');
+                    return;
+                }
+
+                if (isNaN(date.getTime())) {
+                    alert('Invalid date');
+                    return;
+                }
+
+                if (entry.trade_id) {
+                    const confirmed = confirm('Are you sure you want to overwrite this entry?');
+                    if (!confirmed) {
+                        return;
+                    }
+
+                    saveBtn.disabled = true;
+
+                    const newEntryData = {
+                        quantity,
+                        price,
+                        date: date.getTime(),
+                        action,
+                    };
+
+                    if (entry.item == 'credits') {
+                        entry.itemname = unsafeWindow.itemNamer(entry.item, quantity);
+                    }
+
+                    const newEntry = mergeDeep({}, entry, newEntryData);
+
+                    const removed = await HISTORY.removeTrade(entry.trade_id);
+                    if (!removed) {
+                        alert('Could not remove entry');
+                        return;
+                    }
+                    
+                    unsafeWindow.prompt.innerHTML = "<div style='text-align: center'>Loading, please wait...</div>";
+                    await HISTORY.pushTrade(newEntry);
+                } else {
+                    saveBtn.disabled = true;
+                    const newEntry = {
+                        trade_id: uniqid(16),
+                        item: entry.item,
+                        itemname: entry.itemname,
+                        quantity,
+                        price,
+                        date: date.getTime(),
+                        action,
+                    };
+                    unsafeWindow.prompt.innerHTML = "<div style='text-align: center'>Loading, please wait...</div>";
+                    await HISTORY.pushTrade(newEntry);
+                }
+
+                await HISTORY.sortEntries();
+                
+                HISTORY.closeEntryPrompt();
+                loadMarket();
+            });
+
+            unsafeWindow.prompt.appendChild(saveBtn);
+
+            // const editBtn = document.createElement("button");
+            // editBtn.style.position = "absolute";
+            // editBtn.style.bottom = "30px";
+            // editBtn.style.left = "12px";
+            // editBtn.textContent = "edit";
+            // editBtn.addEventListener("click", async () => {
+            //     // const confirmed = confirm('Are you sure you want to remove this entry?');
+            //     // if (!confirmed) {
+            //     //     return;
+            //     // }
+
+            //     // const removed = await HISTORY.removeTrade(entry.trade_id);
+            //     // if (!removed) {
+            //     //     alert('Could not remove entry');
+            //     //     return;
+            //     // }
+
+            //     // HISTORY.closeEntryPrompt();
+            //     // // HISTORY.resetCache();
+            //     // loadMarket();
+            // });
+
+            // unsafeWindow.prompt.appendChild(editBtn);
             
             unsafeWindow.prompt.parentNode.style.display = "block";
             unsafeWindow.prompt.focus();
@@ -1590,9 +1841,8 @@
 
         return parseInt(quantity);
     }
-
-    
-    function maxStack(itemId) {
+ 
+    function maxStack(itemId, loose = false) {
         itemId = getGlobalDataItemId(itemId);
         const itemcat = unsafeWindow.globalData[itemId].itemcat;
         if (itemcat == 'armour' || itemcat == 'weapon') {
@@ -1601,10 +1851,14 @@
 
         // TODO: check if doesnt cause unwanted side effects
         if (itemcat == 'credits') {
-            return 1;
+            return loose ? 9999999 : 1;
         }
 
         return unsafeWindow.globalData[itemId].max_quantity;
+    }
+
+    function uniqid(length = 16) { 
+        return window.btoa(Array.from(window.crypto.getRandomValues(new Uint8Array(length * 2))).map((b) => String.fromCharCode(b)).join("")).replace(/[+/]/g, "").substr(0, length);
     }
 
     /**
@@ -1714,23 +1968,46 @@
         return date.toISOString().split('.')[0].replace('T', ' ');
     }
 
-    function formatNumber(num) {
+    function formatNumber(num, options = {}) {
+        const {
+            minimumFractionDigits = 0,
+            maximumFractionDigits = 2,
+        } = options;
+
         return (new Number(num))
-            .toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2})
+            .toLocaleString('en-US', {minimumFractionDigits, maximumFractionDigits})
             .replace(/\.0+$/, '');
     }
 
-    function formatMoney(num) {
-        return (num < 0 ? '-' : '') + '$' + formatNumber(Math.abs(num));
+    function formatMoney(num, options = {}) {
+        if (typeof options == 'boolean') {
+            options = { plus: options };
+        }
+
+        const {
+            plus = false,
+        } = options;
+
+        const plusSign = plus ? '+' : '';
+
+        return (num < 0 ? '-' : plusSign) + '$' + formatNumber(Math.abs(num), options);
     }
 
-    function formatMoneyHtml(num, neutralColor = false) {
+    function formatMoneyHtml(num, options = {}) {
+        if (typeof options == 'boolean') {
+            options = { neutralColor: options, plus: false };
+        }
+
+        const {
+            neutralColor = false,
+        } = options;
+
         let color = '#FFCC00';
         if (!neutralColor) {
             color = num < 0 ? '#FF0000' : '#00FF00';
         }
 
-        return '<span style="color: ' + color + '">' + formatMoney(num) + '</span>';
+        return '<span style="color: ' + color + '">' + formatMoney(num, options) + '</span>';
     }
 
     function historyAction(e) {
@@ -1895,6 +2172,24 @@
         return tresholdDate;
     }
 
+    function parseDateTimeString(value) {
+        const pattern = /^(\d{4})\-(\d{2})\-(\d{2})(?:\s(\d{2}):(\d{2})(?:\:(\d{2}))?)?$/;
+        const match = value.match(pattern);
+
+        if (!match) {
+            return null;
+        }
+
+        const year = parseInt(match[1]);
+        const month = parseInt(match[2]) - 1;
+        const day = parseInt(match[3]);
+        const hour = parseInt(match[4]) || 0;
+        const minute = parseInt(match[5]) || 0;
+        const second = parseInt(match[6]) || 0;
+
+        return new Date(year, month, day, hour, minute, second);
+    }
+
     function ready() {
         return new Promise(resolve => {
             if (document.readyState === "complete" || document.readyState === "interactive") {
@@ -1903,6 +2198,63 @@
                 document.addEventListener("DOMContentLoaded", resolve);
             }
         });
+    }
+
+    function initHistorySelects() {
+
+        const historySelectComponents = document.getElementsByClassName('historySelectComponent');
+    
+        for(const historySelectComponent of historySelectComponents) {
+            if (historySelectComponent.dataset.init) {
+                continue;
+            }
+    
+            const initValue = historySelectComponent.dataset.value;
+            const choiceElem = historySelectComponent.getElementsByClassName('selectChoice')[0];
+            const [name, dog] = choiceElem.children;
+            dog.textContent = '◄';
+            const listElem = historySelectComponent.getElementsByClassName('selectList')[0];
+    
+            const options = listElem.children;
+            listElem.style.display = 'none';
+    
+            const selectOption = function (value) {
+                historySelectComponent.dataset.value = value;
+    
+                const label = Array.from(options).find(option => option.dataset.value == value)?.textContent;
+    
+                name.textContent = label;
+            };
+    
+            const toggleSelect = function () {
+                const display = listElem.style.display;
+                const isHidden = display == 'none';
+    
+                if (isHidden) {
+                    listElem.style.display = 'block';
+                    dog.textContent = '▼';
+                } else {
+                    listElem.style.display = 'none';
+                    dog.textContent = '◄';
+                }
+            };
+    
+            choiceElem.addEventListener('click', toggleSelect);
+    
+            for(const option of options) {
+                option.addEventListener('click', function () {
+                    const value = this.dataset.value;
+                    selectOption(value);
+                    toggleSelect();
+                });
+            }
+    
+            if (initValue) {
+                selectOption(initValue);
+            }
+
+            historySelectComponent.dataset.init = true;
+        }
     }
 
     /******************************************************
@@ -1932,8 +2284,13 @@
     });
 
     GM_addStyle_object('#marketplace #historyItemDisplay', {
-        top: '174px',
+        top: '155px',
         bottom: '110px',
+    });
+    GM_addStyle_object('.historyEntryForm', {
+        '$ & input::placeholder': {
+            color: 'rgba(255, 255, 0, 0.3)',
+        },
     });
 
     GM_addStyle_object('#marketplace #historySearchArea', {
@@ -1941,12 +2298,16 @@
         top: '100px',
         left: '20px',
         // right: '80px',
-        height: '35px',
-        width: '205px',
+        height: '16px',
+        width: '250px',
         padding: '8px',
         border: '1px #990000 solid',
         textAlign: 'left',
         backgroundColor: 'rgba(0,0,0,0.8)',
+
+        '$ & #historySearchField::placeholder': {
+            color: 'rgba(255, 255, 0, 0.3)',
+        },
         
         '$ & #historyItemSearchResultBox': {
             position: 'absolute',
@@ -1979,11 +2340,12 @@
 
     GM_addStyle_object('#marketplace #historyInfoBox', {
         position: 'absolute',
-        top: '160px',
+        overflowY: 'auto',
+        top: '141px',
         left: '20px',
         right: '20px',
         bottom: '110px',
-        padding: '8px',
+        // padding: '8px',
         border: '1px #990000 solid',
         textAlign: 'left',
         backgroundColor: 'rgba(0,0,0,0.8)',
@@ -2001,6 +2363,41 @@
                 textAlign: 'center',
                 transform: 'translateY(-50%) translateX(-50%)',
             }
+        },
+
+        '$ & table': {
+            fontSize: '12px',
+            fontFamily: '"Courier New", "Arial"',
+            lineHeight: '1',
+            width: '100%',
+            borderCollapse: 'collapse',
+
+            // Table is full width, but only the last td takes up as much space, the rest is just as wide as the content
+            '$ & td': {
+                width: '1%',
+                whiteSpace: 'nowrap',
+                // padding: '4px',
+                //padding x is 4px, padding y is 2px
+                padding: '0px 4px',
+                // border: '1px #990000 solid',
+                textAlign: 'left',
+                height: '32px',
+
+                '$ &:first-child': {
+                    width: '200px',
+                },
+                '$ &:last-child': {
+                    width: '100%',
+                },
+            },
+
+
+            '$ & tr': {
+                borderBottom: '1px #990000 solid',
+                '$ &.row:hover': {
+                    backgroundColor: 'rgba(125, 0, 0, 0.4)',
+                },
+            },
         },
 
     });
@@ -2048,6 +2445,47 @@
             width: '120px',
         },
     });
+
+    GM_addStyle_object('.historySelectComponent', {
+        position: 'relative',
+        '$ & .selectChoice': {
+            position: 'absolute',
+            cursor: 'pointer',
+            width: '80px',
+            display: 'inline-block',
+            textAlign: 'center',
+            backgroundColor: '#222',
+            border: '1px solid #990000',
+
+            '$ & span:last-child': {
+                position: 'absolute',
+                right: '0',
+            },
+
+        },
+        '$ & .selectList': {
+            position: 'absolute',
+            display: 'none',
+            position: 'absolute',
+            zIndex: '10',
+            top: '18px',
+            width: '80px',
+            // overflowY: 'auto',
+            // left: '193px',
+            backgroundColor: '#111',
+            // borderLeft: '1px solid #990000',
+            border: '1px solid #990000',
+            textAlign: 'center',
+
+            '$ & div': {
+                cursor: 'pointer',
+                '$ &:hover': {
+                    backgroundColor: '#333',
+                },
+            },
+
+        },
+    })
 
     
     /******************************************************
@@ -2109,10 +2547,11 @@
                     const searchBox = document.createElement("div");
                     searchBox.id = "historySearchArea";
 
+                    let searchInput;
+
                     if (HISTORY.selectedItem) {
                         searchBox.innerHTML = `
-                            Selected item: <button id="clearHistoryItem">[remove]</button>
-                            <br>
+                            <button id="clearHistoryItem">[x]</button>
                             <div style='display: inline-block;' class="itemName cashhack cashhack-relative" data-cash="${unsafeWindow.itemNamer(HISTORY.selectedItem, HISTORY.selectedItem == 'credits' ? '' : maxStack(HISTORY.selectedItem))}">
                             </div>
                         `;
@@ -2125,17 +2564,18 @@
                     } else {
                         searchBox.innerHTML = `
                             <div style='text-align: left; width: 185px; display: inline-block;'>
-                                Search for item:<br /><input id='historySearchField' type='text' name='historySearch' />
+                                <input id='historySearchField' placeholder='Type to search' type='text' name='historySearch' />
                             </div>
                         `;
                         
-                        const searchInput = searchBox.querySelector('#historySearchField');
+                        searchInput = searchBox.querySelector('#historySearchField');
 
                         
                         const searchFn = debouncedItemSearch();
 
                         searchInput.addEventListener('input', function () {
-                            searchFn(this.value, function (results) {
+                            const value = this.value;
+                            searchFn(value, function (results) {
                                 searchResultBox.innerHTML = '';
                                 for(const result of results) {
                                     // const resultRow = document.createElement('div');
@@ -2163,10 +2603,16 @@
                                     searchResultBox.appendChild(resultButton);
                                 }
 
-                                if (!results.length) {
+                                if (!value.length) {
                                     searchResultBox.classList.add('hidden');
                                 } else {
                                     searchResultBox.classList.remove('hidden');
+
+                                    if (!results.length) {
+                                        const noResults = document.createElement('div');
+                                        noResults.innerText = 'No results found';
+                                        searchResultBox.appendChild(noResults);
+                                    }
                                 }
                             });
                         });
@@ -2213,16 +2659,37 @@
                                 <span style='position: absolute; left: 480px; width: 70px; width: max-content;'>Datetime</span>
                             `;
                             boxLabels.classList.add("opElem");
-                            boxLabels.style.top = "160px";
+                            boxLabels.style.top = "141px";
                             boxLabels.style.left = "26px";
+
+                            const insertBtn = document.createElement("button");
+                            insertBtn.id = "historyInsertBtn";
+                            insertBtn.classList.add("opElem");
+                            insertBtn.style.top = "121px";
+                            insertBtn.style.left = "300px";
+                            insertBtn.innerText = 'Create new entry';
+                            insertBtn.addEventListener('click', function () {
+                                if (pageLock) return;
+                                if (!HISTORY.selectedItem) {
+                                    alert('Please select an item first to create an entry of');
+                                    searchInput?.focus();
+                                    return;
+                                }
+                                HISTORY.renderEntryFormPrompt({
+                                    item: HISTORY.selectedItem,
+                                });
+                            });
+
+                            marketHolder.appendChild(insertBtn);
+
 
                             const historyResultsText = document.createElement("div");
                             historyResultsText.id = "historyResultsText";
                             historyResultsText.classList.add("opElem");
-                            historyResultsText.style.top = "150px";
+                            historyResultsText.style.top = "121px";
                             historyResultsText.style.right = "20px";
                             // historyResultsText.style.width = "100%";
-                            historyResultsText.innerText = historyEntries.length + ' result' + (historyEntries.length == 1 ? '' : 's');
+                            historyResultsText.innerText = historyEntries.length + ' result' + (historyEntries.length == 1 ? '' : 's') + ' found';
             
                             const historyItemDisplay = document.createElement("div");
                             historyItemDisplay.id = "historyItemDisplay";
@@ -2381,6 +2848,9 @@
                                     return 'stack' + (amount == 1 ? '' : 's');
                                 };
 
+                    
+                                // === START OF STATS RENDER
+
                                 // Title with timeframe
                                 const timeframe = SETTINGS.values.hoverStatisticsTimeframe;
                                 const timeframeName = TIMEFRAME_OPTIONS[timeframe];
@@ -2398,55 +2868,59 @@
 
                                 // Bought stats
                                 const amountBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_bought');
+                                const amountBoughtStacks = new Number(amountBought / stackSize).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
+
                                 const totalPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_bought');
                                 const avgPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_bought');
 
-                                const totalBoughtElem = document.createElement("div");
-                                totalBoughtElem.innerHTML = 'Total bought: <span style="color: #FFCC00;">' + amountBought + '</span> ' + perNamer(amountBought) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceBought) + '</span>';
+                                // const totalBoughtElem = document.createElement("div");
+                                // totalBoughtElem.innerHTML = 'Total bought: <span style="color: #FFCC00;">' + amountBought + '</span> ' + perNamer(amountBought) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceBought) + '</span>';
                                 
-                                historyInfoBox.appendChild(totalBoughtElem);
-                                const avgBuyPriceElem = document.createElement("div");
+                                // historyInfoBox.appendChild(totalBoughtElem);
+                                // const avgBuyPriceElem = document.createElement("div");
                                 
-                                avgBuyPriceElem.innerHTML = 'Average buy price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceBought) + '</span>';
-                                if (isAmmo) {
-                                    avgBuyPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceBought * stackSize) + '</span> per stack of ' + stackSize + ')';
-                                }
+                                // avgBuyPriceElem.innerHTML = 'Average buy price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceBought) + '</span>';
+                                // if (isAmmo) {
+                                //     avgBuyPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceBought * stackSize) + '</span> per stack of ' + stackSize + ')';
+                                // }
 
-                                historyInfoBox.appendChild(avgBuyPriceElem);
-                                historyInfoBox.appendChild(document.createElement("br"));
+                                // historyInfoBox.appendChild(avgBuyPriceElem);
+                                // historyInfoBox.appendChild(document.createElement("br"));
 
                                 // Sold stats
                                 const amountSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_sold');
+                                const amountSoldStacks = new Number(amountSold / stackSize).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
+
                                 const totalPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_sold');
                                 const avgPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_sold');
 
-                                const totalSoldElem = document.createElement("div");
-                                totalSoldElem.innerHTML = 'Total sold: <span style="color: #FFCC00;">' + amountSold + '</span> ' + perNamer(amountSold) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceSold) + '</span>';
+                                // const totalSoldElem = document.createElement("div");
+                                // totalSoldElem.innerHTML = 'Total sold: <span style="color: #FFCC00;">' + amountSold + '</span> ' + perNamer(amountSold) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceSold) + '</span>';
                                 
-                                historyInfoBox.appendChild(totalSoldElem);
+                                // historyInfoBox.appendChild(totalSoldElem);
 
-                                const avgSellPriceElem = document.createElement("div");
-                                avgSellPriceElem.innerHTML = 'Average sell price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceSold) + '</span>';
-                                if (isAmmo) {
-                                    avgSellPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceSold * stackSize) + '</span> per stack of ' + stackSize + ')';
-                                }
+                                // const avgSellPriceElem = document.createElement("div");
+                                // avgSellPriceElem.innerHTML = 'Average sell price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceSold) + '</span>';
+                                // if (isAmmo) {
+                                //     avgSellPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceSold * stackSize) + '</span> per stack of ' + stackSize + ')';
+                                // }
 
-                                historyInfoBox.appendChild(avgSellPriceElem);
-                                historyInfoBox.appendChild(document.createElement("br"));
+                                // historyInfoBox.appendChild(avgSellPriceElem);
+                                // historyInfoBox.appendChild(document.createElement("br"));
 
                                 // Profit/Loss stats
                                 const averageProfit = avgPriceSold - avgPriceBought;
                                 const totalProfit = totalPriceSold - totalPriceBought;
 
-                                const averageProfitElem = document.createElement("div");
-                                const avgProfitColor = averageProfit >= 0 ? '#00FF00' : '#FF0000';
-                                averageProfitElem.innerHTML = 'Average profit/loss per ' + perNamer(1) + ': <span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit) + '</span>';
+                                // const averageProfitElem = document.createElement("div");
+                                // const avgProfitColor = averageProfit >= 0 ? '#00FF00' : '#FF0000';
+                                // averageProfitElem.innerHTML = 'Average profit/loss per ' + perNamer(1) + ': <span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit) + '</span>';
 
-                                if (isAmmo) {
-                                    averageProfitElem.innerHTML += ' (<span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit * stackSize) + '</span> per stack of ' + stackSize + ')';
-                                }
+                                // if (isAmmo) {
+                                //     averageProfitElem.innerHTML += ' (<span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit * stackSize) + '</span> per stack of ' + stackSize + ')';
+                                // }
 
-                                historyInfoBox.appendChild(averageProfitElem);
+                                // historyInfoBox.appendChild(averageProfitElem);
 
                                 // const totalProfitOnSoldOnly = totalPriceSold - (avgPriceBought * amountSold);
                                 // const totalProfitOnBoughtOnly = totalPriceSold - (avgPriceBought * amountBought);
@@ -2458,17 +2932,17 @@
                                 // historyInfoBox.appendChild(totalProfitOnSoldOnlyElem);
 
                                 const totalProfitItemCount = Math.min(amountSold, amountBought);
-                                let totalRelativeProfit = 0;
+                                let totalRealProfit = 0;
 
                                 if (totalProfitItemCount > 0) {
-                                    totalRelativeProfit = (totalProfitItemCount * avgPriceSold) - (totalProfitItemCount * avgPriceBought);
+                                    totalRealProfit = (totalProfitItemCount * avgPriceSold) - (totalProfitItemCount * avgPriceBought);
                                 }
 
-                                const totalRelativeProfitElem = document.createElement("div");
-                                const totalRelativeProfitColor = totalRelativeProfit >= 0 ? '#00FF00' : '#FF0000';
-                                totalRelativeProfitElem.innerHTML = 'Total average profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys & sells)';
+                                // const totalRelativeProfitElem = document.createElement("div");
+                                // const totalRelativeProfitColor = totalRelativeProfit >= 0 ? '#00FF00' : '#FF0000';
+                                // totalRelativeProfitElem.innerHTML = 'Total average profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys & sells)';
 
-                                historyInfoBox.appendChild(totalRelativeProfitElem);
+                                // historyInfoBox.appendChild(totalRelativeProfitElem);
 
                                 const totalProfitElem = document.createElement("div");
                                 const totalProfitColor = totalProfit >= 0 ? '#00FF00' : '#FF0000';
@@ -2487,16 +2961,140 @@
                                 }
                                 historyInfoBox.appendChild(lastBoughtElem);
 
-                                const lastSoldElem = document.createElement("div");
+                                // const lastSoldElem = document.createElement("div");
                                 const lastSoldAt = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_date_sold');
                                 const lastSoldFor = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_price_sold');
-                                if (lastSoldAt !== null && lastSoldFor !== null) {
-                                    lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">' + formatDate(new Date(lastSoldAt)) + '</span> for <span style="color: #FFCC00;">' + formatMoney(lastSoldFor) + '</span>';
-                                } else {
-                                    lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">Never sold</span>';
-                                }
+                                // if (lastSoldAt !== null && lastSoldFor !== null) {
+                                //     lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">' + formatDate(new Date(lastSoldAt)) + '</span> for <span style="color: #FFCC00;">' + formatMoney(lastSoldFor) + '</span>';
+                                // } else {
+                                //     lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">Never sold</span>';
+                                // }
 
-                                historyInfoBox.appendChild(lastSoldElem);
+                                // historyInfoBox.appendChild(lastSoldElem);
+
+                                // === END OF STATS RENDER
+
+                                historyInfoBox.innerHTML = `
+                                    <table>
+                                        <tr class="row">
+                                            <td>Amount bought</td>
+                                            <td>
+                                                <span style="color: #FFCC00;">${amountBought}</span> ${perNamer(amountBought)}
+                                                ${isAmmo
+                                                    ? `<br>≈ <span style="color: #FFCC00;">${amountBoughtStacks}</span> ${perStackNamer(amountBoughtStacks)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                for ${formatMoneyHtml(totalPriceBought, true)} total
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Amount sold</td>
+                                            <td>
+                                                <span style="color: #FFCC00;">${amountSold}</span> ${perNamer(amountSold)}
+                                                ${isAmmo
+                                                    ? `<br>≈ <span style="color: #FFCC00;">${amountSoldStacks}</span> ${perStackNamer(amountSoldStacks)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                for ${formatMoneyHtml(totalPriceSold, true)} total
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Average buy price</td>
+                                            <td>
+                                                ${formatMoneyHtml(avgPriceBought, true)} per ${perNamer(1)}
+                                                ${isAmmo
+                                                    ? `<br>${formatMoneyHtml(avgPriceBought * stackSize, true)} per ${perStackNamer(1)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Average sell price</td>
+                                            <td>
+                                                ${formatMoneyHtml(avgPriceSold, true)} per ${perNamer(1)}
+                                                ${isAmmo
+                                                    ? `<br>${formatMoneyHtml(avgPriceSold * stackSize, true)} per ${perStackNamer(1)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Average profit/loss</td>
+                                            <td>
+                                                ${formatMoneyHtml(averageProfit, {neutralColor: false, maximumFractionDigits: 4})} per ${perNamer(1)}
+                                                ${isAmmo
+                                                    ? `<br>${formatMoneyHtml(averageProfit * stackSize, {neutralColor: false, maximumFractionDigits: 4})} per ${perStackNamer(1)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                ${SETTINGS.values.countScraps
+                                                    ? '(With scraps)'
+                                                    : '(Without scraps)'
+                                                }
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Real total profit/loss</td>
+                                            <td>
+                                                ${formatMoneyHtml(totalRealProfit, false)}
+                                            </td>
+                                            <td>
+                                                (Based on <span style="color: #FFCC00;">${totalProfitItemCount}</span> buys & sells)
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Total profit/loss</td>
+                                            <td>
+                                                ${formatMoneyHtml(totalProfit, false)}
+                                            </td>
+                                            <td>
+                                                (Based on <span style="color: #FFCC00;">${amountBought}</span> buys, <span style="color: #FFCC00;">${amountSold}</span> sells)
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Last bought</td>
+                                            <td>
+                                                ${lastBoughtAt !== null
+                                                    ? `at <span style="color: #FFCC00;">${formatDate(new Date(lastBoughtAt))}</span>`
+                                                    : `Never bought`
+                                                }
+                                            </td>
+                                            <td>
+                                                ${lastBoughtFor !== null
+                                                    ? `for ${formatMoneyHtml(lastBoughtFor, true)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Last sold</td>
+                                            <td>
+                                                ${lastSoldAt !== null
+                                                    ? `at <span style="color: #FFCC00;">${formatDate(new Date(lastSoldAt))}</span>`
+                                                    : `Never sold`
+                                                }
+                                            </td>
+                                            <td>
+                                                ${lastSoldFor !== null
+                                                    ? `for ${formatMoneyHtml(lastSoldFor, true)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                        </tr>
+
+                                    </table>
+                                `;
 
 
                             } else {
