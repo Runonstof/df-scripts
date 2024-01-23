@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Market Trades Tracker
+// @name         Market History
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Keep track of your market buy/sale history for Dead Frontier to instantly see your profit and losses
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
@@ -9,6 +9,7 @@
 // @grant        unsafeWindow
 // @grant        GM.getValue
 // @grant        GM.setValue
+// @license      MIT
 // ==/UserScript==
 
 (async function() {
@@ -3604,7 +3605,7 @@
     await SETTINGS.load();
 
     // DEBUG
-    unsafeWindow.HISTORY = HISTORY;
+    // unsafeWindow.HISTORY = HISTORY;
 
     //Populate LOOKUP
     for (const itemId in unsafeWindow.globalData) {
@@ -3633,8 +3634,8 @@
     delete LOOKUP.category__item_id['broken'];
 
     // DEBUG
-    unsafeWindow.LOOKUP = LOOKUP;
-    unsafeWindow.SETTINGS = SETTINGS;
+    // unsafeWindow.LOOKUP = LOOKUP;
+    // unsafeWindow.SETTINGS = SETTINGS;
 
     var historySettingsButton = document.createElement("button");
     historySettingsButton.classList.add("opElem");
