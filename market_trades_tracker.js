@@ -3426,7 +3426,6 @@
     // Source: market.js
     var origSellMenuItemPopulate = unsafeWindow.SellMenuItemPopulate;
     unsafeWindow.SellMenuItemPopulate = function (itemElem) {
-        console.log('a', itemElem);
         // Call original function
         origSellMenuItemPopulate(itemElem);
     };
@@ -3438,6 +3437,33 @@
     // Hook into when an item is sold
     onBeforeWebCall('inventory_new', function (request, response) {
         if (request.params.action !== 'newsell') {
+            return;
+        }
+        if (response.xhr.status != 200) {
+            return;
+        }
+        if (!response.dataObj.hasOwnProperty('OK')) {
+            return;
+        }
+
+        // When the sell is successful, DeadFrontier will do a new webCall to retrieve the new sell listing
+        // We hook ONCE into this webCall, to retrieve the trade id
+        const onSellSuccess = function (request, response) {
+            if (response.xhr.status == 200) {
+                HISTORY.onSellItem(request, response);
+            }
+
+            // Remove self from hook
+            offAfterWebCall('trade_search', onSellSuccess);
+        };
+
+        // Hook into the new sell listing webCall
+        onAfterWebCall('trade_search', onSellSuccess);
+    });
+
+    // Hook into when credits are sold
+    onBeforeWebCall('inventory_new', function (request, response) {
+        if (request.params.action !== 'newsellcredits') {
             return;
         }
         if (response.xhr.status != 200) {
@@ -3558,11 +3584,16 @@
     /******************************************************
      * Await Page Initialization
      ******************************************************/
-
+    console.log('awaiting page initialization');
     // A promise that resolves when document is fully loaded and globalData is filled with stackables
     // This is because DeadFrontier does a request to stackables.json, which is needed for the max stack of items
     // Only after this request is done, globalData will contain ammo with a max_quantity
     await new Promise(resolve => {
+        if (unsafeWindow.globalData.hasOwnProperty('32ammo')) {
+            resolve();
+            return;
+        }
+
         // This is the original function that is called when the stackables.json request is done
         const origUpdateIntoArr = unsafeWindow.updateIntoArr;
         unsafeWindow.updateIntoArr = function (flshArr, baseArr) {
@@ -3597,11 +3628,13 @@
         });
     
     // Load History
+    console.log('awaiting history initialization');
     await HISTORY.init();
     HISTORY.resetCache();
     // HISTORY.initCache();
 
     // Load settings
+    console.log('awaiting settings initialization');
     await SETTINGS.load();
 
     // DEBUG
@@ -3651,6 +3684,7 @@
         fn();
     });
 
+    console.log('awaiting ready');
     await ready();
 
     document.getElementById("invController").removeEventListener("contextmenu", unsafeWindow.openSellContextMenu, false);
