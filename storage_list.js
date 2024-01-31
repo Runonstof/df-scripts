@@ -858,6 +858,28 @@
         });
     });
 
+    // Wait until #normalContainer exists, resolve if it already exists
+    await new Promise(resolve => {
+        const checkExists = () => {
+            console.log('checking');
+            if (document.getElementById('normalContainer')) {
+                resolve();
+                return true;
+            }
+            return false;
+        };
+        const exists = checkExists();
+        if (exists) {
+            return;
+        }
+
+        const checkExistInterval = setInterval(function() {
+            if (checkExists()) {
+                clearInterval(checkExistInterval);
+            }
+        }, 100);
+    });
+
     
     //Populate LOOKUP
     for (const itemId in unsafeWindow.globalData) {
