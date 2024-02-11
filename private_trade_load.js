@@ -6,8 +6,6 @@
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=deadfrontier.com
-// @run-at       document-body
-// @grant        unsafeWindow
 // ==/UserScript==
 
 (function () {
