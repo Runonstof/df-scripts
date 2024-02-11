@@ -10,6 +10,8 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @license      MIT
+// @downloadURL  https://update.greasyfork.org/scripts/486171/df-storage-list.user.js
+// @updateURL    https://update.greasyfork.org/scripts/486171/df-storage-list.meta.js
 // ==/UserScript==
 
 (async function() {
@@ -820,6 +822,7 @@
     // A promise that resolves when document is fully loaded and globalData is filled with stackables
     // This is because DeadFrontier does a request to stackables.json, which is needed for the max stack of items
     // Only after this request is done, globalData will contain ammo with a max_quantity
+    console.log('awaitin page init');
     await new Promise(resolve => {
         if (unsafeWindow.globalData.hasOwnProperty('32ammo')) {
             resolve();
@@ -843,22 +846,27 @@
         }
     });
 
+    console.log('awaitin storage init');
     await new Promise(resolve => {
         if (unsafeWindow.storageBox) {
             resolve();
             return;
         }
 
-        onAfterWebCall('get_storage', function (request, response) {
-            if (response.xhr.status !== 200) {
-                return;
-            }
+        let checkExistsInterval;
 
-            resolve();
-        });
+        const checkExists = () => {
+            if (unsafeWindow.storageBox) {
+                clearInterval(checkExistsInterval);
+                resolve();
+            }
+        };
+
+        checkExistsInterval = setInterval(checkExists, 100);
     });
 
     // Wait until #normalContainer exists, resolve if it already exists
+    console.log('awaitin normalContainer');
     await new Promise(resolve => {
         const checkExists = () => {
             console.log('checking');
@@ -880,7 +888,7 @@
         }, 100);
     });
 
-    
+
     //Populate LOOKUP
     for (const itemId in unsafeWindow.globalData) {
         const item = unsafeWindow.globalData[itemId];
@@ -919,7 +927,9 @@
      * Script start
      ******************************************************/
 
+    console.log('loading');
     await STORAGE_LIST.load();
+    console.log('loaded');
     STORAGE_LIST.init();
     STORAGE_LIST.render();
 
@@ -928,10 +938,12 @@
             return;
         }
 
+        console.log('shown: ' , STORAGE_LIST.shown)
         if (!STORAGE_LIST.shown) {
             return;
         }
 
+        STORAGE_LIST.init();
         STORAGE_LIST.render();
     }); 
 })();
