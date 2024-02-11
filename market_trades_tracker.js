@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Market History
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  Keep track of your market buy/sale history for Dead Frontier to instantly see your profit and losses
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
@@ -10,6 +10,8 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @license      MIT
+// @downloadURL  https://update.greasyfork.org/scripts/485526/market-history.user.js
+// @updateURL    https://update.greasyfork.org/scripts/485526/market-history.meta.js
 // ==/UserScript==
 
 (async function() {
@@ -81,7 +83,7 @@
     // Our history object
     // That is responsible for keeping track of all trades
     // And calculating statistics
-    const HISTORY = {
+    const _HISTORY = {
         entries: [],
         selectedItem: null,
 
@@ -499,7 +501,7 @@
         },
 
         async setSelectedItem(item) {
-            this.selectedItem = item;
+            this.selectedItem = item ? getBaseItemId(item) : null;
             await GM.setValue(this.storageKey('selectedItem'), item);
         },
         async init() {
@@ -936,6 +938,14 @@
         },
     };
 
+    const HISTORY = new Proxy(_HISTORY, {
+        get(target, prop) {
+            return Reflect.get(...arguments);
+        },
+        set(target, prop, value) {
+            return Reflect.set(...arguments);
+        },
+    });
 
     const SETTINGS = {
         ui: {
@@ -2201,6 +2211,557 @@
         });
     }
 
+    function injectHistoryTabIntoMarketplace() {
+        const pageNavigation = document.getElementById('selectMarket');
+        if (!pageNavigation) {
+            return;
+        }
+        
+        // Async context, i dont like nested callbacks, i like async/await
+        (async function () {
+            // Add history button
+            const historyBtn = document.createElement('button');
+            historyBtn.setAttribute('data-action', 'switchMarket');
+            historyBtn.setAttribute('data-page', 'history');
+            historyBtn.setAttribute('id', 'loadHistory');
+            historyBtn.innerText = 'history';
+            historyBtn.addEventListener("click", marketAction);
+            pageNavigation.appendChild(historyBtn);
+
+    
+            switch (unsafeWindow.marketScreen) {
+                case 'history':
+                    historyBtn.disabled = true;
+                    pageLogo.textContent = "Market History";
+
+                    const historyNavigation = document.createElement('div');
+                    historyNavigation.id = 'selectHistoryCategory';
+                    pageNavigation.after(historyNavigation);
+
+                    const listBtn = document.createElement('button');
+                    listBtn.setAttribute('data-action', 'switchHistory');
+                    listBtn.setAttribute('data-page', 'list');
+                    listBtn.setAttribute('id', 'historyList');
+                    listBtn.innerText = 'list';
+                    listBtn.addEventListener("click", historyAction);
+                    
+                    const statsBtn = document.createElement('button');
+                    statsBtn.setAttribute('data-action', 'switchHistory');
+                    statsBtn.setAttribute('data-page', 'stats');
+                    statsBtn.setAttribute('id', 'historyStats');
+                    statsBtn.innerText = 'statistics';
+                    statsBtn.addEventListener("click", historyAction);
+
+
+                    historyNavigation.appendChild(listBtn);
+                    historyNavigation.appendChild(statsBtn);
+
+                    const searchBox = document.createElement("div");
+                    searchBox.id = "historySearchArea";
+
+                    let searchInput;
+
+                    if (HISTORY.selectedItem) {
+                        const itemName = unsafeWindow.itemNamer(HISTORY.selectedItem, HISTORY.selectedItem == 'credits' ? '' : maxStack(HISTORY.selectedItem));
+                        /*<div style='display: inline-block;' class="itemName cashhack cashhack-relative" data-cash="${itemName}">
+                            </div> */
+                        searchBox.innerHTML = `
+                            <button id="clearHistoryItem">[x]</button>
+
+                            <div class="opElem" id="selectedItemsWrapper">
+                                <div data-value="${HISTORY.selectedItem}" id="selectedItems" class="historySelectComponent">
+                                    <div class="selectChoice">
+                                        <span></span>
+                                        <span></span>
+                                    </div>
+                                    <div class="selectList">
+                                        <div data-value="${HISTORY.selectedItem}" class="selectOption">${itemName}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+
+                        const clearHistoryItemBtn = searchBox.querySelector('#clearHistoryItem');
+                        clearHistoryItemBtn.addEventListener('click', function () {
+                            HISTORY.setSelectedItem(null);
+                            loadMarket();
+                        });
+                    } else {
+                        searchBox.innerHTML = `
+                            <div style='text-align: left; width: 185px; display: inline-block;'>
+                                <input id='historySearchField' placeholder='Type to search' type='text' name='historySearch' />
+                            </div>
+                        `;
+                        
+                        searchInput = searchBox.querySelector('#historySearchField');
+
+                        
+                        const searchFn = debouncedItemSearch();
+
+                        searchInput.addEventListener('input', function () {
+                            const value = this.value;
+                            searchFn(value, function (results) {
+                                searchResultBox.innerHTML = '';
+                                for(const result of results) {
+                                    // const resultRow = document.createElement('div');
+
+                                    const resultButton = document.createElement('button');
+                                    resultButton.innerText = result.name;
+                                    resultButton.style.width = '100%';
+                                    resultButton.style.textAlign = 'left';
+                                    resultButton.classList.add("fakeItem");
+                                    resultButton.setAttribute("data-type", result.item);
+                                    resultButton.setAttribute("data-quantity", result.item == 'credits' ? '' : maxStack(result.item));
+        
+                                    resultButton.addEventListener('click', async function () {
+                                        this.disabled = true;
+                                        await HISTORY.setSelectedItem(result.item)
+                                        searchResultBox.innerHTML = '';
+                                        searchResultBox.classList.add('hidden');
+
+                                        loadMarket();
+                                        // searchInput.value = result.name;
+                                        // searchResultBox.innerHTML = '';
+                                    });
+                                    // resultRow.appendChild(resultButton);
+                                    // searchResultBox.appendChild(resultRow);
+                                    searchResultBox.appendChild(resultButton);
+                                }
+
+                                if (!value.length) {
+                                    searchResultBox.classList.add('hidden');
+                                } else {
+                                    searchResultBox.classList.remove('hidden');
+
+                                    if (!results.length) {
+                                        const noResults = document.createElement('div');
+                                        noResults.innerText = 'No results found';
+                                        searchResultBox.appendChild(noResults);
+                                    }
+                                }
+                            });
+                        });
+                        searchInput.addEventListener('blur', function (e) {
+                            // Check if not focused on result box
+                            if (e.relatedTarget && e.relatedTarget.parentNode.id == 'historyItemSearchResultBox') {
+                                return;
+                            }
+
+                            searchResultBox.classList.add('hidden');
+                        });
+                        searchInput.addEventListener('focus', function () {
+                            // If result box has results, show it
+                            if (searchResultBox.children.length) {
+                                searchResultBox.classList.remove('hidden');
+                            }
+                        });
+
+                        const searchResultBox = document.createElement("div");
+                        searchResultBox.id = "historyItemSearchResultBox";
+                        searchResultBox.classList.add("hidden");
+                        
+                        searchBox.appendChild(searchResultBox);
+
+                    }
+                    marketHolder.appendChild(searchBox);
+
+                    initHistorySelects();
+                    // Add history navbar below
+    
+                    switch (unsafeWindow.historyScreen) {
+                        case 'list':
+                            listBtn.disabled = true;
+
+                            let historyEntries = HISTORY.entries;
+                            if (HISTORY.selectedItem) {
+                                historyEntries = historyEntries.filter(entry => getBaseItemId(entry.item) == HISTORY.selectedItem);
+                            }
+                            
+                            const boxLabels = document.createElement("div");
+                            boxLabels.id = "historyLabels";
+                            boxLabels.innerHTML = `
+                                <span>Item Name</span>
+                                <span style='position: absolute; left: 208px; width: 80px; width: max-content;'>Type</span>
+                                <span style='position: absolute; left: 320px; width: max-content;'>Price</span>
+                                <span style='position: absolute; left: 480px; width: 70px; width: max-content;'>Datetime</span>
+                            `;
+                            boxLabels.classList.add("opElem");
+                            boxLabels.style.top = "141px";
+                            boxLabels.style.left = "26px";
+
+                            const insertBtn = document.createElement("button");
+                            insertBtn.id = "historyInsertBtn";
+                            insertBtn.classList.add("opElem");
+                            insertBtn.style.top = "121px";
+                            insertBtn.style.left = "300px";
+                            insertBtn.innerText = 'Create new entry';
+                            insertBtn.addEventListener('click', function () {
+                                if (pageLock) return;
+                                if (!HISTORY.selectedItem) {
+                                    alert('Please select an item first to create an entry of');
+                                    searchInput?.focus();
+                                    return;
+                                }
+                                HISTORY.renderEntryFormPrompt({
+                                    item: HISTORY.selectedItem,
+                                });
+                            });
+
+                            marketHolder.appendChild(insertBtn);
+
+
+                            const historyResultsText = document.createElement("div");
+                            historyResultsText.id = "historyResultsText";
+                            historyResultsText.classList.add("opElem");
+                            historyResultsText.style.top = "80px";
+                            historyResultsText.style.left = "20px";
+                            // historyResultsText.style.width = "100%";
+                            historyResultsText.innerText = historyEntries.length + ' result' + (historyEntries.length == 1 ? '' : 's') + ' found';
+            
+                            const historyItemDisplay = document.createElement("div");
+                            historyItemDisplay.id = "historyItemDisplay";
+                            historyItemDisplay.classList.add("marketDataHolder");
+                            historyItemDisplay.setAttribute('data-offset', 0);
+                            historyItemDisplay.setAttribute('data-per-page', 20);
+                            
+                            const renderHistoryItems = function () {
+                                const offset = parseInt(historyItemDisplay.getAttribute('data-offset'));
+                                const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
+        
+                                const entryCount = historyEntries.length;
+        
+                                if (offset >= entryCount) {
+                                    return false;
+                                }
+                                
+                                for(let i = 0; i < perPage; i++) {
+                                    const entryIndex = entryCount - offset - i - 1;
+                                    const entry = historyEntries[entryIndex] || null;
+                                    // const entryIndex = i + offset;
+                                    // const entry = historyEntries[entryIndex] || null;
+                                    if (!entry) {
+                                        continue;
+                                    }
+                                    const isPending = HISTORY.cache.pending_trade_ids.includes(entry.trade_id);
+                                    
+                                    // if (isPending) {
+                                    //     continue;
+                                    // }
+        
+                                    // <div class="fakeItem" data-type="avalanchemg14_stats777" data-quantity="1" data-price="53000000"><div class="itemName cashhack credits" data-cash="Avalanche MG14">Avalanche MG14</div> <span style="color: #c0c0c0;">(AC)</span><div class="tradeZone">Outpost</div><div class="seller">ScarHK</div><div class="salePrice" style="color: red;">$53,000,000</div><button disabled="" data-action="buyItem" data-item-location="1" data-buynum="350533865">buy</button></div>
+                                    const row = document.createElement("div");
+                                    row.classList.add("fakeItem");
+                                    if (isPending) {
+                                        row.classList.add("pending");
+                                    }
+                                    row.setAttribute("data-type", entry.item);
+                                    row.setAttribute("data-quantity", entry.quantity);
+                                    row.setAttribute("data-price", entry.price);
+                                    row.setAttribute("data-trade-id", entry.trade_id);
+
+                                    row.addEventListener('click', function () {
+                                        if (pageLock) return;
+                                        const tradeId = this.getAttribute('data-trade-id');
+                                        const trade = HISTORY.cache.trade_id[tradeId];
+                                        if (!trade) {
+                                            alert('Could not find trade in cache');
+                                            return;
+                                        }
+
+                                        HISTORY.renderEntryPrompt(trade);
+                                    });
+
+        
+                                    let afterName = calcMCTag(entry.item, false, "span", "") || '';
+        
+                                    const itemId = getGlobalDataItemId(entry.item);
+                                    const itemCat = getItemType(unsafeWindow.globalData[itemId]);
+                                    if (itemCat == 'ammo') {
+                                        afterName += ' <span>(' + entry.quantity + ')</span>';
+                                    }
+                                    
+                                    row.innerHTML = `
+                                        <div class="itemName cashhack credits" data-cash="${entry.itemname}">${entry.itemname}</div>
+                                        ${afterName}
+                                        <div class="tradeType">${entry.action}</div>
+                                        <div class="salePrice">$${entry.price}</div>
+                                        <div class="saleDate">${formatDate(new Date(entry.date))}</div>
+                                    `;
+                                    // row.innerHTML = "<div class='itemName cashhack credits' data-cash='" + entry.itemname + "'>" + entry.itemname + "</div><div class='tradeZone'>" + entry.trade_zone + "</div><div class='seller'>" + entry.member_name + "</div><div class='salePrice' style='color: red;'>$" + entry.price + "</div>";
+                                    historyItemDisplay.appendChild(row);
+                                }
+        
+                                return true;
+                            };
+                            
+                            const onHistoryScroll = function () {
+                                const fullScrollHeight = historyItemDisplay.scrollHeight;
+                                const scrolledHeight = historyItemDisplay.scrollTop + historyItemDisplay.clientHeight;
+                                const diff = fullScrollHeight - scrolledHeight;
+        
+                                if (diff > 50) {
+                                    return;
+                                }
+        
+                                const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
+                                historyItemDisplay.removeEventListener('scroll', onHistoryScroll);
+                                historyItemDisplay.setAttribute('data-offset', parseInt(historyItemDisplay.getAttribute('data-offset')) + perPage);
+                                const hasMore = renderHistoryItems();
+                                if (hasMore) {
+                                    historyItemDisplay.addEventListener('scroll', onHistoryScroll);
+                                }
+                            };
+        
+                            marketHolder.appendChild(historyItemDisplay);
+                            marketHolder.appendChild(boxLabels);
+                            marketHolder.appendChild(historyResultsText);
+            
+                            await HISTORY.load();
+                            // retrieve current user's pending trades
+                            await new Promise(resolve => {
+                                var dataArray = {};
+        
+                                dataArray["pagetime"] = userVars["pagetime"];
+                                dataArray["tradezone"] = "";
+                                dataArray["searchname"] = "";
+                                dataArray["searchtype"] = "sellinglist";
+                                dataArray["search"] = "trades";
+                                dataArray["memID"] = userVars["userID"];
+                                dataArray["category"] = "";
+                                dataArray["profession"] = "";
+                                
+                                // Execute webCall
+                                webCall("trade_search", dataArray, resolve, true);
+                                // Cache will be updated by webCall hook somewhere else in the code
+                            });
+                            
+                            renderHistoryItems();
+                            historyItemDisplay.addEventListener('scroll', onHistoryScroll);
+                            break;
+                        case 'stats':
+                            statsBtn.disabled = true;
+
+                            // const filterBox = document.createElement("div");
+                            // filterBox.id = "historyFilterArea";
+                            // Filter box shows items that are added to search on
+                            // But also a date range select
+                            // filterBox.innerHTML =
+
+                            // categorySelect += "<div style='display: inline-block; width: 260px;'>In Category:<br/><div id='categoryChoice' data-catname=''><span id='cat'>Everything</span><span id='dog' style='float: right;'>&#9668;</span></div>";
+                            // <div class="historyDetailsText">Click on a trade to see more info</div>
+                            const historyInfoBox = document.createElement("div");
+                            historyInfoBox.id = "historyInfoBox";
+
+                            if (HISTORY.selectedItem) {
+                                const globalStatisticItem = unsafeWindow.globalData[getGlobalDataItemId(HISTORY.selectedItem)];
+                                const isAmmo = globalStatisticItem.itemcat == 'ammo';
+                                
+
+                                const stackSize = maxStack(HISTORY.selectedItem);
+
+                                const perNamer = function (amount) {
+                                    let perName = 'item';
+                                    if (isAmmo) {
+                                        perName = 'round';
+                                    }
+
+                                    if (HISTORY.selectedItem == 'fuelammo') {
+                                        return 'mL';
+                                    }
+
+                                    return perName + (amount == 1 ? '' : 's');
+                                };
+                                const perStackNamer = function (amount) {
+                                    return 'stack' + (amount == 1 ? '' : 's');
+                                };
+
+                    
+                                // === START OF STATS RENDER
+
+                                // Title with timeframe
+                                const timeframe = SETTINGS.values.hoverStatisticsTimeframe;
+
+                                // Bought stats
+                                const amountBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_bought');
+                                const amountBoughtStacks = new Number(amountBought / stackSize).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
+
+                                const totalPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_bought');
+                                const avgPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_bought');
+
+              
+                                // Sold stats
+                                const amountSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_sold');
+                                const amountSoldStacks = new Number(amountSold / stackSize).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
+
+                                const totalPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_sold');
+                                const avgPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_sold');
+
+                                // Profit/Loss stats
+                                const averageProfit = avgPriceSold - avgPriceBought;
+                                const totalProfit = totalPriceSold - totalPriceBought;
+
+
+
+                                const totalProfitItemCount = Math.min(amountSold, amountBought);
+                                let totalRealProfit = 0;
+
+                                if (totalProfitItemCount > 0) {
+                                    totalRealProfit = (totalProfitItemCount * avgPriceSold) - (totalProfitItemCount * avgPriceBought);
+                                }
+
+
+                                const lastBoughtAt = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_date_bought');
+                                const lastBoughtFor = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_price_bought');
+
+                                const lastSoldAt = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_date_sold');
+                                const lastSoldFor = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_price_sold');
+
+                                // === END OF STATS RENDER
+
+                                historyInfoBox.innerHTML = `
+                                    <table>
+                                        <tr class="row">
+                                            <td>Amount bought</td>
+                                            <td>
+                                                <span style="color: #FFCC00;">${amountBought}</span> ${perNamer(amountBought)}
+                                                ${isAmmo
+                                                    ? `<br>≈ <span style="color: #FFCC00;">${amountBoughtStacks}</span> ${perStackNamer(amountBoughtStacks)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                for ${formatMoneyHtml(totalPriceBought, true)} total
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Amount sold</td>
+                                            <td>
+                                                <span style="color: #FFCC00;">${amountSold}</span> ${perNamer(amountSold)}
+                                                ${isAmmo
+                                                    ? `<br>≈ <span style="color: #FFCC00;">${amountSoldStacks}</span> ${perStackNamer(amountSoldStacks)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                for ${formatMoneyHtml(totalPriceSold, true)} total
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Average buy price</td>
+                                            <td>
+                                                ${formatMoneyHtml(avgPriceBought, true)} per ${perNamer(1)}
+                                                ${isAmmo
+                                                    ? `<br>${formatMoneyHtml(avgPriceBought * stackSize, true)} per ${perStackNamer(1)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Average sell price</td>
+                                            <td>
+                                                ${formatMoneyHtml(avgPriceSold, true)} per ${perNamer(1)}
+                                                ${isAmmo
+                                                    ? `<br>${formatMoneyHtml(avgPriceSold * stackSize, true)} per ${perStackNamer(1)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Average profit/loss</td>
+                                            <td>
+                                                ${formatMoneyHtml(averageProfit, {neutralColor: false, maximumFractionDigits: 4})} per ${perNamer(1)}
+                                                ${isAmmo
+                                                    ? `<br>${formatMoneyHtml(averageProfit * stackSize, {neutralColor: false, maximumFractionDigits: 4})} per ${perStackNamer(1)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                            <td>
+                                                ${SETTINGS.values.countScraps
+                                                    ? '(With scraps)'
+                                                    : '(Without scraps)'
+                                                }
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Real total profit/loss</td>
+                                            <td>
+                                                ${formatMoneyHtml(totalRealProfit, false)}
+                                            </td>
+                                            <td>
+                                                (Based on <span style="color: #FFCC00;">${totalProfitItemCount}</span> buys & sells)
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Total profit/loss</td>
+                                            <td>
+                                                ${formatMoneyHtml(totalProfit, false)}
+                                            </td>
+                                            <td>
+                                                (Based on <span style="color: #FFCC00;">${amountBought}</span> buys, <span style="color: #FFCC00;">${amountSold}</span> sells)
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Last bought</td>
+                                            <td>
+                                                ${lastBoughtAt
+                                                    ? `at <span style="color: #FFCC00;">${formatDate(new Date(lastBoughtAt))}</span>`
+                                                    : `Never bought`
+                                                }
+                                            </td>
+                                            <td>
+                                                ${lastBoughtFor
+                                                    ? `for ${formatMoneyHtml(lastBoughtFor, true)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                        </tr>
+                                        <tr class="row">
+                                            <td>Last sold</td>
+                                            <td>
+                                                ${lastSoldAt
+                                                    ? `at <span style="color: #FFCC00;">${formatDate(new Date(lastSoldAt))}</span>`
+                                                    : `Never sold`
+                                                }
+                                            </td>
+                                            <td>
+                                                ${lastSoldFor
+                                                    ? `for ${formatMoneyHtml(lastSoldFor, true)}`
+                                                    : ``
+                                                }
+                                            </td>
+                                        </tr>
+
+                                    </table>
+                                `;
+
+
+                            } else {
+                                historyInfoBox.innerHTML = `
+                                    <div class="historyDetailsContainer">
+                                        <div class="historyDetailsText">Search for an item to see its statistics</div>
+                                    </div>
+                                `;
+                            }
+
+
+                            // marketHolder.appendChild(filterBox);
+                            marketHolder.appendChild(historyInfoBox);
+
+                            break;
+                    }
+                    
+                    promptEnd();
+                    break;
+            }
+        })();
+    }
+
     function initHistorySelects() {
 
         const historySelectComponents = document.getElementsByClassName('historySelectComponent');
@@ -2486,7 +3047,24 @@
             },
 
         },
-    })
+    });
+
+    GM_addStyle_object('#selectedItemsWrapper', {
+        width: '200px',
+        top: '8px',
+        left: '40px',
+
+        '$ & .historySelectComponent': {
+            width: '100%',
+
+            '$ & .selectChoice': {
+                width: '100%',
+            },
+            '$ & .selectList': {
+                width: '100%',
+            },
+        },
+    });
 
     
     /******************************************************
@@ -2499,624 +3077,11 @@
     // This approach should make it still compatible with other userscripts and official site scripts.
     const origLoadMarket = unsafeWindow.loadMarket;
     unsafeWindow.loadMarket = function() {
+        console.log('override loadmarket');
         // Execute original function
         origLoadMarket.apply(unsafeWindow, arguments);
-        const pageNavigation = document.getElementById('selectMarket');
-        if (!pageNavigation) {
-            return;
-        }
-        
-        // Async context, i dont like nested callbacks, i like async/await
-        (async function () {
-            // Add history button
-            const historyBtn = document.createElement('button');
-            historyBtn.setAttribute('data-action', 'switchMarket');
-            historyBtn.setAttribute('data-page', 'history');
-            historyBtn.setAttribute('id', 'loadHistory');
-            historyBtn.innerText = 'history';
-            historyBtn.addEventListener("click", marketAction);
-            pageNavigation.appendChild(historyBtn);
 
-    
-            switch (unsafeWindow.marketScreen) {
-                case 'history':
-                    historyBtn.disabled = true;
-                    pageLogo.textContent = "Market History";
-
-                    const historyNavigation = document.createElement('div');
-                    historyNavigation.id = 'selectHistoryCategory';
-                    pageNavigation.after(historyNavigation);
-
-                    const listBtn = document.createElement('button');
-                    listBtn.setAttribute('data-action', 'switchHistory');
-                    listBtn.setAttribute('data-page', 'list');
-                    listBtn.setAttribute('id', 'historyList');
-                    listBtn.innerText = 'list';
-                    listBtn.addEventListener("click", historyAction);
-                    
-                    const statsBtn = document.createElement('button');
-                    statsBtn.setAttribute('data-action', 'switchHistory');
-                    statsBtn.setAttribute('data-page', 'stats');
-                    statsBtn.setAttribute('id', 'historyStats');
-                    statsBtn.innerText = 'statistics';
-                    statsBtn.addEventListener("click", historyAction);
-
-
-                    historyNavigation.appendChild(listBtn);
-                    historyNavigation.appendChild(statsBtn);
-
-                    const searchBox = document.createElement("div");
-                    searchBox.id = "historySearchArea";
-
-                    let searchInput;
-
-                    if (HISTORY.selectedItem) {
-                        searchBox.innerHTML = `
-                            <button id="clearHistoryItem">[x]</button>
-                            <div style='display: inline-block;' class="itemName cashhack cashhack-relative" data-cash="${unsafeWindow.itemNamer(HISTORY.selectedItem, HISTORY.selectedItem == 'credits' ? '' : maxStack(HISTORY.selectedItem))}">
-                            </div>
-                        `;
-
-                        const clearHistoryItemBtn = searchBox.querySelector('#clearHistoryItem');
-                        clearHistoryItemBtn.addEventListener('click', function () {
-                            HISTORY.setSelectedItem(null);
-                            loadMarket();
-                        });
-                    } else {
-                        searchBox.innerHTML = `
-                            <div style='text-align: left; width: 185px; display: inline-block;'>
-                                <input id='historySearchField' placeholder='Type to search' type='text' name='historySearch' />
-                            </div>
-                        `;
-                        
-                        searchInput = searchBox.querySelector('#historySearchField');
-
-                        
-                        const searchFn = debouncedItemSearch();
-
-                        searchInput.addEventListener('input', function () {
-                            const value = this.value;
-                            searchFn(value, function (results) {
-                                searchResultBox.innerHTML = '';
-                                for(const result of results) {
-                                    // const resultRow = document.createElement('div');
-
-                                    const resultButton = document.createElement('button');
-                                    resultButton.innerText = result.name;
-                                    resultButton.style.width = '100%';
-                                    resultButton.style.textAlign = 'left';
-                                    resultButton.classList.add("fakeItem");
-                                    resultButton.setAttribute("data-type", result.item);
-                                    resultButton.setAttribute("data-quantity", result.item == 'credits' ? '' : maxStack(result.item));
-        
-                                    resultButton.addEventListener('click', async function () {
-                                        this.disabled = true;
-                                        await HISTORY.setSelectedItem(result.item)
-                                        searchResultBox.innerHTML = '';
-                                        searchResultBox.classList.add('hidden');
-
-                                        loadMarket();
-                                        // searchInput.value = result.name;
-                                        // searchResultBox.innerHTML = '';
-                                    });
-                                    // resultRow.appendChild(resultButton);
-                                    // searchResultBox.appendChild(resultRow);
-                                    searchResultBox.appendChild(resultButton);
-                                }
-
-                                if (!value.length) {
-                                    searchResultBox.classList.add('hidden');
-                                } else {
-                                    searchResultBox.classList.remove('hidden');
-
-                                    if (!results.length) {
-                                        const noResults = document.createElement('div');
-                                        noResults.innerText = 'No results found';
-                                        searchResultBox.appendChild(noResults);
-                                    }
-                                }
-                            });
-                        });
-                        searchInput.addEventListener('blur', function (e) {
-                            // Check if not focused on result box
-                            if (e.relatedTarget && e.relatedTarget.parentNode.id == 'historyItemSearchResultBox') {
-                                return;
-                            }
-
-                            searchResultBox.classList.add('hidden');
-                        });
-                        searchInput.addEventListener('focus', function () {
-                            // If result box has results, show it
-                            if (searchResultBox.children.length) {
-                                searchResultBox.classList.remove('hidden');
-                            }
-                        });
-
-                        const searchResultBox = document.createElement("div");
-                        searchResultBox.id = "historyItemSearchResultBox";
-                        searchResultBox.classList.add("hidden");
-                        
-                        searchBox.appendChild(searchResultBox);
-
-                    }
-                    marketHolder.appendChild(searchBox);
-                    // Add history navbar below
-    
-                    switch (unsafeWindow.historyScreen) {
-                        case 'list':
-                            listBtn.disabled = true;
-
-                            let historyEntries = HISTORY.entries;
-                            if (HISTORY.selectedItem) {
-                                historyEntries = historyEntries.filter(entry => entry.item == HISTORY.selectedItem);
-                            }
-                            
-                            const boxLabels = document.createElement("div");
-                            boxLabels.id = "historyLabels";
-                            boxLabels.innerHTML = `
-                                <span>Item Name</span>
-                                <span style='position: absolute; left: 208px; width: 80px; width: max-content;'>Type</span>
-                                <span style='position: absolute; left: 320px; width: max-content;'>Price</span>
-                                <span style='position: absolute; left: 480px; width: 70px; width: max-content;'>Datetime</span>
-                            `;
-                            boxLabels.classList.add("opElem");
-                            boxLabels.style.top = "141px";
-                            boxLabels.style.left = "26px";
-
-                            const insertBtn = document.createElement("button");
-                            insertBtn.id = "historyInsertBtn";
-                            insertBtn.classList.add("opElem");
-                            insertBtn.style.top = "121px";
-                            insertBtn.style.left = "300px";
-                            insertBtn.innerText = 'Create new entry';
-                            insertBtn.addEventListener('click', function () {
-                                if (pageLock) return;
-                                if (!HISTORY.selectedItem) {
-                                    alert('Please select an item first to create an entry of');
-                                    searchInput?.focus();
-                                    return;
-                                }
-                                HISTORY.renderEntryFormPrompt({
-                                    item: HISTORY.selectedItem,
-                                });
-                            });
-
-                            marketHolder.appendChild(insertBtn);
-
-
-                            const historyResultsText = document.createElement("div");
-                            historyResultsText.id = "historyResultsText";
-                            historyResultsText.classList.add("opElem");
-                            historyResultsText.style.top = "121px";
-                            historyResultsText.style.right = "20px";
-                            // historyResultsText.style.width = "100%";
-                            historyResultsText.innerText = historyEntries.length + ' result' + (historyEntries.length == 1 ? '' : 's') + ' found';
-            
-                            const historyItemDisplay = document.createElement("div");
-                            historyItemDisplay.id = "historyItemDisplay";
-                            historyItemDisplay.classList.add("marketDataHolder");
-                            historyItemDisplay.setAttribute('data-offset', 0);
-                            historyItemDisplay.setAttribute('data-per-page', 20);
-                            
-                            const renderHistoryItems = function () {
-                                const offset = parseInt(historyItemDisplay.getAttribute('data-offset'));
-                                const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
-        
-                                const entryCount = historyEntries.length;
-        
-                                if (offset >= entryCount) {
-                                    return false;
-                                }
-                                
-                                for(let i = 0; i < perPage; i++) {
-                                    const entryIndex = entryCount - offset - i - 1;
-                                    const entry = historyEntries[entryIndex] || null;
-                                    // const entryIndex = i + offset;
-                                    // const entry = historyEntries[entryIndex] || null;
-                                    if (!entry) {
-                                        continue;
-                                    }
-                                    const isPending = HISTORY.cache.pending_trade_ids.includes(entry.trade_id);
-                                    
-                                    // if (isPending) {
-                                    //     continue;
-                                    // }
-        
-                                    // <div class="fakeItem" data-type="avalanchemg14_stats777" data-quantity="1" data-price="53000000"><div class="itemName cashhack credits" data-cash="Avalanche MG14">Avalanche MG14</div> <span style="color: #c0c0c0;">(AC)</span><div class="tradeZone">Outpost</div><div class="seller">ScarHK</div><div class="salePrice" style="color: red;">$53,000,000</div><button disabled="" data-action="buyItem" data-item-location="1" data-buynum="350533865">buy</button></div>
-                                    const row = document.createElement("div");
-                                    row.classList.add("fakeItem");
-                                    if (isPending) {
-                                        row.classList.add("pending");
-                                    }
-                                    row.setAttribute("data-type", entry.item);
-                                    row.setAttribute("data-quantity", entry.quantity);
-                                    row.setAttribute("data-price", entry.price);
-                                    row.setAttribute("data-trade-id", entry.trade_id);
-
-                                    row.addEventListener('click', function () {
-                                        if (pageLock) return;
-                                        const tradeId = this.getAttribute('data-trade-id');
-                                        const trade = HISTORY.cache.trade_id[tradeId];
-                                        if (!trade) {
-                                            alert('Could not find trade in cache');
-                                            return;
-                                        }
-
-                                        HISTORY.renderEntryPrompt(trade);
-                                    });
-
-        
-                                    let afterName = calcMCTag(entry.item, false, "span", "") || '';
-        
-                                    const itemId = getGlobalDataItemId(entry.item);
-                                    const itemCat = getItemType(unsafeWindow.globalData[itemId]);
-                                    if (itemCat == 'ammo') {
-                                        afterName += ' <span>(' + entry.quantity + ')</span>';
-                                    }
-                                    
-                                    row.innerHTML = `
-                                        <div class="itemName cashhack credits" data-cash="${entry.itemname}">${entry.itemname}</div>
-                                        ${afterName}
-                                        <div class="tradeType">${entry.action}</div>
-                                        <div class="salePrice">$${entry.price}</div>
-                                        <div class="saleDate">${formatDate(new Date(entry.date))}</div>
-                                    `;
-                                    // row.innerHTML = "<div class='itemName cashhack credits' data-cash='" + entry.itemname + "'>" + entry.itemname + "</div><div class='tradeZone'>" + entry.trade_zone + "</div><div class='seller'>" + entry.member_name + "</div><div class='salePrice' style='color: red;'>$" + entry.price + "</div>";
-                                    historyItemDisplay.appendChild(row);
-                                }
-        
-                                return true;
-                            };
-                            
-                            const onHistoryScroll = function () {
-                                const fullScrollHeight = historyItemDisplay.scrollHeight;
-                                const scrolledHeight = historyItemDisplay.scrollTop + historyItemDisplay.clientHeight;
-                                const diff = fullScrollHeight - scrolledHeight;
-        
-                                if (diff > 50) {
-                                    return;
-                                }
-        
-                                const perPage = parseInt(historyItemDisplay.getAttribute('data-per-page'));
-                                historyItemDisplay.removeEventListener('scroll', onHistoryScroll);
-                                historyItemDisplay.setAttribute('data-offset', parseInt(historyItemDisplay.getAttribute('data-offset')) + perPage);
-                                const hasMore = renderHistoryItems();
-                                if (hasMore) {
-                                    historyItemDisplay.addEventListener('scroll', onHistoryScroll);
-                                }
-                            };
-        
-                            marketHolder.appendChild(historyItemDisplay);
-                            marketHolder.appendChild(boxLabels);
-                            marketHolder.appendChild(historyResultsText);
-            
-                            await HISTORY.load();
-                            // retrieve current user's pending trades
-                            await new Promise(resolve => {
-                                var dataArray = {};
-        
-                                dataArray["pagetime"] = userVars["pagetime"];
-                                dataArray["tradezone"] = "";
-                                dataArray["searchname"] = "";
-                                dataArray["searchtype"] = "sellinglist";
-                                dataArray["search"] = "trades";
-                                dataArray["memID"] = userVars["userID"];
-                                dataArray["category"] = "";
-                                dataArray["profession"] = "";
-                                
-                                // Execute webCall
-                                webCall("trade_search", dataArray, resolve, true);
-                                // Cache will be updated by webCall hook somewhere else in the code
-                            });
-                            
-                            renderHistoryItems();
-                            historyItemDisplay.addEventListener('scroll', onHistoryScroll);
-                            break;
-                        case 'stats':
-                            statsBtn.disabled = true;
-
-                            // const filterBox = document.createElement("div");
-                            // filterBox.id = "historyFilterArea";
-                            // Filter box shows items that are added to search on
-                            // But also a date range select
-                            // filterBox.innerHTML =
-
-                            // categorySelect += "<div style='display: inline-block; width: 260px;'>In Category:<br/><div id='categoryChoice' data-catname=''><span id='cat'>Everything</span><span id='dog' style='float: right;'>&#9668;</span></div>";
-                            // <div class="historyDetailsText">Click on a trade to see more info</div>
-                            const historyInfoBox = document.createElement("div");
-                            historyInfoBox.id = "historyInfoBox";
-
-                            if (HISTORY.selectedItem) {
-                                const globalStatisticItem = unsafeWindow.globalData[getGlobalDataItemId(HISTORY.selectedItem)];
-                                const isAmmo = globalStatisticItem.itemcat == 'ammo';
-                                
-
-                                const stackSize = maxStack(HISTORY.selectedItem);
-
-                                const perNamer = function (amount) {
-                                    let perName = 'item';
-                                    if (isAmmo) {
-                                        perName = 'round';
-                                    }
-
-                                    if (HISTORY.selectedItem == 'fuelammo') {
-                                        return 'mL';
-                                    }
-
-                                    return perName + (amount == 1 ? '' : 's');
-                                };
-                                const perStackNamer = function (amount) {
-                                    return 'stack' + (amount == 1 ? '' : 's');
-                                };
-
-                    
-                                // === START OF STATS RENDER
-
-                                // Title with timeframe
-                                const timeframe = SETTINGS.values.hoverStatisticsTimeframe;
-                                const timeframeName = TIMEFRAME_OPTIONS[timeframe];
-
-                                const title = 'Statistics ' + timeframeName.toLowerCase();
-                                const titleElem = document.createElement("div");
-                                titleElem.innerHTML = title;
-                                titleElem.style.textDecoration = 'underline';
-                                titleElem.style.fontSize = '14pt';
-                                titleElem.style.width = '100%';
-                                titleElem.style.textAlign = 'center';
-                                historyInfoBox.appendChild(titleElem);
-                                historyInfoBox.appendChild(document.createElement("br"));
-
-
-                                // Bought stats
-                                const amountBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_bought');
-                                const amountBoughtStacks = new Number(amountBought / stackSize).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
-
-                                const totalPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_bought');
-                                const avgPriceBought = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_bought');
-
-                                // const totalBoughtElem = document.createElement("div");
-                                // totalBoughtElem.innerHTML = 'Total bought: <span style="color: #FFCC00;">' + amountBought + '</span> ' + perNamer(amountBought) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceBought) + '</span>';
-                                
-                                // historyInfoBox.appendChild(totalBoughtElem);
-                                // const avgBuyPriceElem = document.createElement("div");
-                                
-                                // avgBuyPriceElem.innerHTML = 'Average buy price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceBought) + '</span>';
-                                // if (isAmmo) {
-                                //     avgBuyPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceBought * stackSize) + '</span> per stack of ' + stackSize + ')';
-                                // }
-
-                                // historyInfoBox.appendChild(avgBuyPriceElem);
-                                // historyInfoBox.appendChild(document.createElement("br"));
-
-                                // Sold stats
-                                const amountSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'amount_sold');
-                                const amountSoldStacks = new Number(amountSold / stackSize).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 2});
-
-                                const totalPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'total_price_sold');
-                                const avgPriceSold = HISTORY.getItemInfo(HISTORY.selectedItem, 'avg_price_sold');
-
-                                // const totalSoldElem = document.createElement("div");
-                                // totalSoldElem.innerHTML = 'Total sold: <span style="color: #FFCC00;">' + amountSold + '</span> ' + perNamer(amountSold) + ' for <span style="color: #FFCC00;">' + formatMoney(totalPriceSold) + '</span>';
-                                
-                                // historyInfoBox.appendChild(totalSoldElem);
-
-                                // const avgSellPriceElem = document.createElement("div");
-                                // avgSellPriceElem.innerHTML = 'Average sell price per ' + perNamer(1) + ': <span style="color: #FFCC00;">' + formatMoney(avgPriceSold) + '</span>';
-                                // if (isAmmo) {
-                                //     avgSellPriceElem.innerHTML += ' (<span style="color: #FFCC00;">' + formatMoney(avgPriceSold * stackSize) + '</span> per stack of ' + stackSize + ')';
-                                // }
-
-                                // historyInfoBox.appendChild(avgSellPriceElem);
-                                // historyInfoBox.appendChild(document.createElement("br"));
-
-                                // Profit/Loss stats
-                                const averageProfit = avgPriceSold - avgPriceBought;
-                                const totalProfit = totalPriceSold - totalPriceBought;
-
-                                // const averageProfitElem = document.createElement("div");
-                                // const avgProfitColor = averageProfit >= 0 ? '#00FF00' : '#FF0000';
-                                // averageProfitElem.innerHTML = 'Average profit/loss per ' + perNamer(1) + ': <span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit) + '</span>';
-
-                                // if (isAmmo) {
-                                //     averageProfitElem.innerHTML += ' (<span style="color: ' + avgProfitColor + ';">' + formatMoney(averageProfit * stackSize) + '</span> per stack of ' + stackSize + ')';
-                                // }
-
-                                // historyInfoBox.appendChild(averageProfitElem);
-
-                                // const totalProfitOnSoldOnly = totalPriceSold - (avgPriceBought * amountSold);
-                                // const totalProfitOnBoughtOnly = totalPriceSold - (avgPriceBought * amountBought);
-
-                                // const totalProfitOnSoldOnlyElem = document.createElement("div");
-                                // const totalProfitOnSoldOnlyColor = totalProfitOnSoldOnly >= 0 ? '#00FF00' : '#FF0000';
-                                // totalProfitOnSoldOnlyElem.innerHTML = 'Total profit on sold only: <span style="color: ' + totalProfitOnSoldOnlyColor + ';">' + formatMoney(totalProfitOnSoldOnly) + '</span> (' + amountSold + ' ' + perName + (amountSold == 1 ? '' : 's') + ')';
-
-                                // historyInfoBox.appendChild(totalProfitOnSoldOnlyElem);
-
-                                const totalProfitItemCount = Math.min(amountSold, amountBought);
-                                let totalRealProfit = 0;
-
-                                if (totalProfitItemCount > 0) {
-                                    totalRealProfit = (totalProfitItemCount * avgPriceSold) - (totalProfitItemCount * avgPriceBought);
-                                }
-
-                                // const totalRelativeProfitElem = document.createElement("div");
-                                // const totalRelativeProfitColor = totalRelativeProfit >= 0 ? '#00FF00' : '#FF0000';
-                                // totalRelativeProfitElem.innerHTML = 'Total average profit/loss: <span style="color: ' + totalRelativeProfitColor + ';">' + formatMoney(totalRelativeProfit) + '</span> (Based on ' + totalProfitItemCount + ' buys & sells)';
-
-                                // historyInfoBox.appendChild(totalRelativeProfitElem);
-
-                                const totalProfitElem = document.createElement("div");
-                                const totalProfitColor = totalProfit >= 0 ? '#00FF00' : '#FF0000';
-                                totalProfitElem.innerHTML = 'Total profit/loss: <span style="color: ' + totalProfitColor + ';">' + formatMoney(totalProfit) + '</span> (Based on ' + amountBought + ' buys, ' + amountSold + ' sells)';
-
-                                historyInfoBox.appendChild(totalProfitElem);
-                                historyInfoBox.appendChild(document.createElement("br"));
-
-                                const lastBoughtElem = document.createElement("div");
-                                const lastBoughtAt = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_date_bought');
-                                const lastBoughtFor = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_price_bought');
-                                if (lastBoughtAt !== null && lastBoughtFor !== null) {
-                                    lastBoughtElem.innerHTML = 'Last bought at: <span style="color: #FFCC00;">' + formatDate(new Date(lastBoughtAt)) + '</span> for <span style="color: #FFCC00;">' + formatMoney(lastBoughtFor) + '</span>';
-                                } else {
-                                    lastBoughtElem.innerHTML = 'Last bought at: <span style="color: #FFCC00;">Never bought</span>';
-                                }
-                                historyInfoBox.appendChild(lastBoughtElem);
-
-                                // const lastSoldElem = document.createElement("div");
-                                const lastSoldAt = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_date_sold');
-                                const lastSoldFor = HISTORY.getItemInfo(HISTORY.selectedItem, 'last_price_sold');
-                                // if (lastSoldAt !== null && lastSoldFor !== null) {
-                                //     lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">' + formatDate(new Date(lastSoldAt)) + '</span> for <span style="color: #FFCC00;">' + formatMoney(lastSoldFor) + '</span>';
-                                // } else {
-                                //     lastSoldElem.innerHTML = 'Last sold at: <span style="color: #FFCC00;">Never sold</span>';
-                                // }
-
-                                // historyInfoBox.appendChild(lastSoldElem);
-
-                                // === END OF STATS RENDER
-
-                                historyInfoBox.innerHTML = `
-                                    <table>
-                                        <tr class="row">
-                                            <td>Amount bought</td>
-                                            <td>
-                                                <span style="color: #FFCC00;">${amountBought}</span> ${perNamer(amountBought)}
-                                                ${isAmmo
-                                                    ? `<br>≈ <span style="color: #FFCC00;">${amountBoughtStacks}</span> ${perStackNamer(amountBoughtStacks)}`
-                                                    : ``
-                                                }
-                                            </td>
-                                            <td>
-                                                for ${formatMoneyHtml(totalPriceBought, true)} total
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Amount sold</td>
-                                            <td>
-                                                <span style="color: #FFCC00;">${amountSold}</span> ${perNamer(amountSold)}
-                                                ${isAmmo
-                                                    ? `<br>≈ <span style="color: #FFCC00;">${amountSoldStacks}</span> ${perStackNamer(amountSoldStacks)}`
-                                                    : ``
-                                                }
-                                            </td>
-                                            <td>
-                                                for ${formatMoneyHtml(totalPriceSold, true)} total
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Average buy price</td>
-                                            <td>
-                                                ${formatMoneyHtml(avgPriceBought, true)} per ${perNamer(1)}
-                                                ${isAmmo
-                                                    ? `<br>${formatMoneyHtml(avgPriceBought * stackSize, true)} per ${perStackNamer(1)}`
-                                                    : ``
-                                                }
-                                            </td>
-                                            <td>
-                                                
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Average sell price</td>
-                                            <td>
-                                                ${formatMoneyHtml(avgPriceSold, true)} per ${perNamer(1)}
-                                                ${isAmmo
-                                                    ? `<br>${formatMoneyHtml(avgPriceSold * stackSize, true)} per ${perStackNamer(1)}`
-                                                    : ``
-                                                }
-                                            </td>
-                                            <td>
-                                                
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Average profit/loss</td>
-                                            <td>
-                                                ${formatMoneyHtml(averageProfit, {neutralColor: false, maximumFractionDigits: 4})} per ${perNamer(1)}
-                                                ${isAmmo
-                                                    ? `<br>${formatMoneyHtml(averageProfit * stackSize, {neutralColor: false, maximumFractionDigits: 4})} per ${perStackNamer(1)}`
-                                                    : ``
-                                                }
-                                            </td>
-                                            <td>
-                                                ${SETTINGS.values.countScraps
-                                                    ? '(With scraps)'
-                                                    : '(Without scraps)'
-                                                }
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Real total profit/loss</td>
-                                            <td>
-                                                ${formatMoneyHtml(totalRealProfit, false)}
-                                            </td>
-                                            <td>
-                                                (Based on <span style="color: #FFCC00;">${totalProfitItemCount}</span> buys & sells)
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Total profit/loss</td>
-                                            <td>
-                                                ${formatMoneyHtml(totalProfit, false)}
-                                            </td>
-                                            <td>
-                                                (Based on <span style="color: #FFCC00;">${amountBought}</span> buys, <span style="color: #FFCC00;">${amountSold}</span> sells)
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Last bought</td>
-                                            <td>
-                                                ${lastBoughtAt !== null
-                                                    ? `at <span style="color: #FFCC00;">${formatDate(new Date(lastBoughtAt))}</span>`
-                                                    : `Never bought`
-                                                }
-                                            </td>
-                                            <td>
-                                                ${lastBoughtFor !== null
-                                                    ? `for ${formatMoneyHtml(lastBoughtFor, true)}`
-                                                    : ``
-                                                }
-                                            </td>
-                                        </tr>
-                                        <tr class="row">
-                                            <td>Last sold</td>
-                                            <td>
-                                                ${lastSoldAt !== null
-                                                    ? `at <span style="color: #FFCC00;">${formatDate(new Date(lastSoldAt))}</span>`
-                                                    : `Never sold`
-                                                }
-                                            </td>
-                                            <td>
-                                                ${lastSoldFor !== null
-                                                    ? `for ${formatMoneyHtml(lastSoldFor, true)}`
-                                                    : ``
-                                                }
-                                            </td>
-                                        </tr>
-
-                                    </table>
-                                `;
-
-
-                            } else {
-                                historyInfoBox.innerHTML = `
-                                    <div class="historyDetailsContainer">
-                                        <div class="historyDetailsText">Search for an item to see its statistics</div>
-                                    </div>
-                                `;
-                            }
-
-
-                            // marketHolder.appendChild(filterBox);
-                            marketHolder.appendChild(historyInfoBox);
-
-                            break;
-                    }
-                    
-                    promptEnd();
-                    break;
-            }
-        })();
+        injectHistoryTabIntoMarketplace();
     };
 
     // Source: base.js
@@ -3637,9 +3602,6 @@
     console.log('awaiting settings initialization');
     await SETTINGS.load();
 
-    // DEBUG
-    // unsafeWindow.HISTORY = HISTORY;
-
     //Populate LOOKUP
     for (const itemId in unsafeWindow.globalData) {
         const item = unsafeWindow.globalData[itemId];
@@ -3648,8 +3610,6 @@
         if (!LOOKUP.category__item_id.hasOwnProperty(categoryId)) {
             LOOKUP.category__item_id[categoryId] = [];
         }
-
-        LOOKUP.category__item_id[categoryId].push(itemId);
     }
 
     for (const categoryId in LOOKUP.category__item_id) {
@@ -3667,8 +3627,10 @@
     delete LOOKUP.category__item_id['broken'];
 
     // DEBUG
-    // unsafeWindow.LOOKUP = LOOKUP;
-    // unsafeWindow.SETTINGS = SETTINGS;
+    unsafeWindow.LOOKUP = LOOKUP;
+    unsafeWindow.SETTINGS = SETTINGS;
+    unsafeWindow.HISTORY = HISTORY;
+
 
     var historySettingsButton = document.createElement("button");
     historySettingsButton.classList.add("opElem");
@@ -3712,9 +3674,7 @@
     });
 
 
-
-    // onAfterWebCall(null, function (request, response, result) {
-        
-    //     console.log('after ' + webCall.call, webCall);
-    // });
+    if (page == 35) {
+        injectHistoryTabIntoMarketplace();
+    }
 })();
