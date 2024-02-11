@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DF Storage List
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Shows your storage, but as a list. Features filters and sorting.
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
