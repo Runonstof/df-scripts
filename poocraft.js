@@ -27,4 +27,6 @@
     unsafeWindow.mcData['001'] = ['#964B00', 'Poo', 'PC'];
     unsafeWindow.mcData['010'] = ['#964B00', 'Poo', 'PC'];
     unsafeWindow.mcData['100'] = ['#964B00', 'Poo', 'PC'];
+    unsafeWindow.mcData['0100'] = ['#964B00', 'Poo', 'PC'];
+    unsafeWindow.mcData['0001'] = ['#964B00', 'Poo', 'PC'];
 })();
