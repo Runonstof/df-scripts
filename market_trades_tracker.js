@@ -74,6 +74,8 @@
         after: {},
         afterAll: [],
         beforeAll: [],
+
+        lastExecutedAt: {},
     };
 
     const LOOKUP = {
@@ -86,6 +88,59 @@
     const _HISTORY = {
         entries: [],
         selectedItem: null,
+        filters: {
+            minDate: null,
+            maxDate: null,
+            type: 'all',
+        },
+
+        getFilteredEntries() {
+            let historyEntries = this.entries;
+
+            if (this.selectedItem || this.filters.minDate || this.filters.maxDate || this.filters.type !== 'all') {
+                historyEntries = historyEntries.filter(entry => {
+
+                    // Check by item id
+                    if (this.selectedItem && getBaseItemId(entry.item) != HISTORY.selectedItem) {
+                        return false;
+                    }
+
+                    // Check by action type
+                    if (this.filters.type === 'buy' && entry.action !== 'buy') {
+                        return false;
+                    }
+
+                    if (this.filters.type === 'sell' && entry.action !== 'sell') {
+                        return false;
+                    }
+
+                    if (this.filters.type === 'scrap' && entry.action !== 'scrap') {
+                        return false;
+                    }
+
+                    if (this.filters.type === 'sell_scrap' && entry.action !== 'sell' && entry.action !== 'scrap') {
+                        return false;
+                    }
+
+                    // Check by date
+                    if (this.filters.minDate && entry.date < this.filters.minDate) {
+                        return false;
+                    }
+
+                    if (this.filters.maxDate) {
+                        const checkMaxDate = this.filters.maxDate + 86400000; // Add 1 day
+
+                        if (entry.date > checkMaxDate) {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                });
+            }
+
+            return historyEntries;
+        },
 
         // Cached values, to prevent having to loop through all entries every time
         // Causing performance to improve
@@ -504,8 +559,12 @@
             this.selectedItem = item ? getBaseItemId(item) : null;
             await GM.setValue(this.storageKey('selectedItem'), item);
         },
+        async saveFilters() {
+            await GM.setValue(this.storageKey('filters'), this.filters);
+        },
         async init() {
             this.selectedItem = await GM.getValue(this.storageKey('selectedItem'), null);
+            this.filters = mergeDeep({}, this.filters, await GM.getValue(this.storageKey('filters'), {}));
             await this.load();
         },
         async load() {
@@ -677,7 +736,7 @@
                 entry.itemname = unsafeWindow.itemNamer(entry.item, '');
             }
             
-            const maxQuantity = maxStack(entry.item, true);
+            const maxQuantity = maxStack(entry.item, false);
 
             unsafeWindow.prompt.innerHTML = `
                 <div class="historyEntryForm">
@@ -687,7 +746,7 @@
                         <span style="text-decoration: underline;">Item:</span><br>
                         ${entry.itemname}
                         <br>
-                        <input type="number" min="1" max="${maxQuantity}" placeholder="Quantity" style="width: 50px;" id="entryFormQuantity" value="${entry.quantity || maxQuantity}" />
+                        <input type="number" min="0" max="${maxQuantity}" placeholder="Quantity" style="width: 50px;" id="entryFormQuantity" value="${entry.quantity || maxQuantity}" />
                     </div>
                     <br>
                     <div style="position: relative;">
@@ -709,7 +768,7 @@
                         </div>
                         <div style="position: absolute; left: 100px;">
                             <span style="text-decoration: underline;">Price:</span><br>
-                            <span style="color: #FFCC00;">$</span>&nbsp;<input type="number" min="1" max="9999999999" placeholder="Price" style="width: 50px;" id="entryFormPrice" value="${entry.price}" />
+                            <span style="color: #FFCC00;">$</span>&nbsp;<input type="number" min="1" max="9999999999" placeholder="Price" style="width: 50px;" id="entryFormPrice" value="${entry.price || 0}" />
                         </div>
                         <br>
                         <br>
@@ -782,12 +841,14 @@
                 const date = new Date(document.getElementById('entryFormDate').value);
                 const action = document.getElementById('entryFormAction').dataset.value;
 
+                const maxQuantity = maxStack(entry.item, true);
+                
                 if (isNaN(quantity) || quantity < 1 || quantity > maxQuantity) {
                     alert('Invalid quantity, max is ' + maxQuantity);
                     return;
                 }
 
-                if (isNaN(price) || price < 1 || price > 9999999999) {
+                if (isNaN(price) || price < 0 || price > 9999999999) {
                     alert('Invalid price');
                     return;
                 }
@@ -831,7 +892,7 @@
                     const newEntry = {
                         trade_id: uniqid(16),
                         item: entry.item,
-                        itemname: entry.itemname,
+                        itemname: unsafeWindow.itemNamer(entry.item, quantity),
                         quantity,
                         price,
                         date: date.getTime(),
@@ -1973,10 +2034,21 @@
         }
     }
 
-    function formatDate(date) {
+    function formatDate(date, options = {}) {
+        const {
+            format = 'datetime',
+        } = options;
+
         const offset = date.getTimezoneOffset()
         date = new Date(date.getTime() - (offset*60*1000))
-        return date.toISOString().split('.')[0].replace('T', ' ');
+
+        if (format == 'datetime') {
+            return date.toISOString().split('.')[0].replace('T', ' ');
+        } else if (format == 'date') {
+            return date.toISOString().split('T')[0];
+        }
+
+        throw new Error('Invalid date format: ' + format);
     }
 
     function formatNumber(num, options = {}) {
@@ -1997,7 +2069,12 @@
 
         const {
             plus = false,
+            showFree = false,
         } = options;
+
+        if (num == 0 && showFree) {
+            return 'Free';
+        }
 
         const plusSign = plus ? '+' : '';
 
@@ -2089,11 +2166,8 @@
         var processRow = function (row) {
             var finalVal = '';
             for (var j = 0; j < row.length; j++) {
-                try {
-                    var innerValue = row[j] === null ? '' : row[j].toString();
-                } catch(exc) {
-                    debugger;
-                }
+                var innerValue = row[j] === null ? '' : row[j].toString();
+
                 if (row[j] instanceof Date) {
                     innerValue = row[j].toLocaleString();
                 };
@@ -2212,6 +2286,9 @@
     }
 
     function injectHistoryTabIntoMarketplace() {
+        if (unsafeWindow.document.getElementById('loadHistory')) {
+            return;
+        }
         const pageNavigation = document.getElementById('selectMarket');
         if (!pageNavigation) {
             return;
@@ -2258,6 +2335,36 @@
 
                     const searchBox = document.createElement("div");
                     searchBox.id = "historySearchArea";
+
+                    const filterBox = document.createElement("div");
+                    filterBox.id = "historyFilterArea";
+
+                    filterBox.innerHTML = `
+                    <div style="position: relative;">
+                        <div class="opElem" id="filterActionTypeWrapper">
+                            <div data-value="${HISTORY.filters.type}" id="filterActionType" class="historySelectComponent">
+                                <div class="selectChoice">
+                                    <span></span>
+                                    <span></span>
+                                </div>
+                                <div class="selectList">
+                                    <div data-value="all" class="selectOption">- All -</div>
+                                    <div data-value="buy" class="selectOption">Buy</div>
+                                    <div data-value="sell" class="selectOption">Sell</div>
+                                    <div data-value="scrap" class="selectOption">Scrap</div>
+                                    <div data-value="sell_scrap" class="selectOption">Sell/Scrap</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <input type="date" id="filterMinDate" class="opElem" value="${HISTORY.filters.minDate ? formatDate(new Date(HISTORY.filters.minDate), {format: 'date'}) : ''}"/>
+                        <input type="date" id="filterMaxDate" class="opElem" value="${HISTORY.filters.maxDate ? formatDate(new Date(HISTORY.filters.maxDate), {format: 'date'}) : ''}"/>
+
+                        <button id="filterGo" class="opElem">Filter</button>
+                    </div>
+                    `;
+
+                    initHistorySelects();
 
                     let searchInput;
 
@@ -2365,6 +2472,58 @@
                     }
                     marketHolder.appendChild(searchBox);
 
+                    if (unsafeWindow.historyScreen == 'list') {
+
+                        marketHolder.appendChild(filterBox);
+                        unsafeWindow.document.getElementById('filterActionType').oncustomselect = function (event) {
+                            if (event.cause == 'init') {
+                                return;
+                            }
+                            
+                            HISTORY.filters.type = event.value;
+    
+                            // loadMarket();
+                        }
+    
+                        unsafeWindow.document.getElementById('filterMinDate').addEventListener('change', function () {
+                            // console.log('min date change');
+                            // console.log(this.value);
+                            let value = this.value || null;
+    
+                            if (value) {
+                                // Convert yyyy-mm-dd to timestamp like from Date.now()
+                                value = new Date(value).getTime();
+                            }
+    
+                            HISTORY.filters.minDate = value;
+                        });
+    
+                        unsafeWindow.document.getElementById('filterMaxDate').addEventListener('change', function () {
+                            // console.log('max date change');
+                            // console.log(this.value);
+                            let value = this.value || null;
+    
+                            if (value) {
+                                // Convert yyyy-mm-dd to timestamp like from Date.now()
+                                value = new Date(value).getTime();
+                            }
+    
+                            HISTORY.filters.maxDate = value;
+                        });
+    
+                        unsafeWindow.document.getElementById('filterGo').addEventListener('click', async function () {
+                            if (this.disabled) {
+                                return;
+                            }
+    
+                            this.disabled = true;
+                            
+                            await HISTORY.saveFilters();
+                            
+                            loadMarket();
+                        });
+                    }
+
                     initHistorySelects();
                     // Add history navbar below
     
@@ -2372,10 +2531,8 @@
                         case 'list':
                             listBtn.disabled = true;
 
-                            let historyEntries = HISTORY.entries;
-                            if (HISTORY.selectedItem) {
-                                historyEntries = historyEntries.filter(entry => getBaseItemId(entry.item) == HISTORY.selectedItem);
-                            }
+                            let historyEntries = HISTORY.getFilteredEntries();
+                            
                             
                             const boxLabels = document.createElement("div");
                             boxLabels.id = "historyLabels";
@@ -2392,8 +2549,8 @@
                             const insertBtn = document.createElement("button");
                             insertBtn.id = "historyInsertBtn";
                             insertBtn.classList.add("opElem");
-                            insertBtn.style.top = "121px";
-                            insertBtn.style.left = "300px";
+                            insertBtn.style.top = "80px";
+                            insertBtn.style.right = "20px";
                             insertBtn.innerText = 'Create new entry';
                             insertBtn.addEventListener('click', function () {
                                 if (pageLock) return;
@@ -2479,12 +2636,13 @@
                                     if (itemCat == 'ammo') {
                                         afterName += ' <span>(' + entry.quantity + ')</span>';
                                     }
+                                    const displayPrice = formatMoney(entry.price, {showFree: true});
                                     
                                     row.innerHTML = `
                                         <div class="itemName cashhack credits" data-cash="${entry.itemname}">${entry.itemname}</div>
                                         ${afterName}
                                         <div class="tradeType">${entry.action}</div>
-                                        <div class="salePrice">$${entry.price}</div>
+                                        <div class="salePrice">${displayPrice}</div>
                                         <div class="saleDate">${formatDate(new Date(entry.date))}</div>
                                     `;
                                     // row.innerHTML = "<div class='itemName cashhack credits' data-cash='" + entry.itemname + "'>" + entry.itemname + "</div><div class='tradeZone'>" + entry.trade_zone + "</div><div class='seller'>" + entry.member_name + "</div><div class='salePrice' style='color: red;'>$" + entry.price + "</div>";
@@ -2519,6 +2677,15 @@
                             await HISTORY.load();
                             // retrieve current user's pending trades
                             await new Promise(resolve => {
+                                const now = Date.now();
+                                const lastCheck = WEBCALL_HOOKS.lastExecutedAt.trade_search || 0;
+
+                                // Check if last check was less than 30 seconds ago
+                                if (lastCheck && (now - lastCheck) < 30000) {
+                                    resolve();
+                                    return;
+                                }
+
                                 var dataArray = {};
         
                                 dataArray["pagetime"] = userVars["pagetime"];
@@ -2530,6 +2697,8 @@
                                 dataArray["category"] = "";
                                 dataArray["profession"] = "";
                                 
+                                WEBCALL_HOOKS.lastExecutedAt.trade_search = now;
+
                                 // Execute webCall
                                 webCall("trade_search", dataArray, resolve, true);
                                 // Cache will be updated by webCall hook somewhere else in the code
@@ -2780,7 +2949,22 @@
             const options = listElem.children;
             listElem.style.display = 'none';
     
-            const selectOption = function (value) {
+            const selectOption = function (value, isInit = false) {
+                const eventObject = {
+                    target: historySelectComponent,
+                    value: value,
+                    canceled: false,
+                    cause: isInit ? 'init' : 'change',
+                };
+
+                if (historySelectComponent.oncustomselect) {
+                    historySelectComponent.oncustomselect(eventObject);
+                }
+
+                if (eventObject.canceled) {
+                    return;
+                }
+
                 historySelectComponent.dataset.value = value;
     
                 const label = Array.from(options).find(option => option.dataset.value == value)?.textContent;
@@ -2812,7 +2996,7 @@
             }
     
             if (initValue) {
-                selectOption(initValue);
+                selectOption(initValue, true);
             }
 
             historySelectComponent.dataset.init = true;
@@ -2891,13 +3075,23 @@
     GM_addStyle_object('#marketplace #historyFilterArea', {
         position: 'absolute',
         top: '100px',
-        left: '250px',
+        left: '290px',
         right: '20px',
-        height: '35px',
+        height: '16px',
         padding: '8px',
         border: '1px #990000 solid',
         textAlign: 'left',
         backgroundColor: 'rgba(0,0,0,0.8)',
+
+        '$ & #filterMinDate': {
+            left: '110px',
+        },
+        '$ & #filterMaxDate': {
+            left: '210px',
+        },
+        '$ & #filterGo': {
+            left: '310px',
+        },
     });
 
     GM_addStyle_object('#marketplace #historyInfoBox', {
@@ -3053,6 +3247,23 @@
         width: '200px',
         top: '8px',
         left: '40px',
+
+        '$ & .historySelectComponent': {
+            width: '100%',
+
+            '$ & .selectChoice': {
+                width: '100%',
+            },
+            '$ & .selectList': {
+                width: '100%',
+            },
+        },
+    });
+
+    GM_addStyle_object('#filterActionTypeWrapper', {
+        width: '100px',
+        // top: '8px',
+        // left: '40px',
 
         '$ & .historySelectComponent': {
             width: '100%',
@@ -3591,6 +3802,8 @@
 
             SEARCHABLE_ITEMS.push(itemId + '_cooked');
         });
+
+    unsafeWindow.SEARCHABLE_ITEMS = SEARCHABLE_ITEMS;
     
     // Load History
     console.log('awaiting history initialization');
@@ -3674,6 +3887,7 @@
     });
 
 
+    // Create button if script loaded too early
     if (page == 35) {
         injectHistoryTabIntoMarketplace();
     }
