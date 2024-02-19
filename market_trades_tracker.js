@@ -2639,7 +2639,7 @@
                                     let afterName = entry.item ? calcMCTag(entry.item, false, "span", "") || '' : '';
         
                                     const itemId = entry.item ? getGlobalDataItemId(entry.item) : 'broken';
-                                    const itemCat = getItemType(unsafeWindow.globalData[itemId]);
+                                    const itemCat = entry.item ? getItemType(unsafeWindow.globalData[itemId]) : null;
                                     if (itemCat == 'ammo') {
                                         afterName += ' <span>(' + entry.quantity + ')</span>';
                                     }
