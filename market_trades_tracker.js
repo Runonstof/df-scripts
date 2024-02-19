@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Market History
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  Keep track of your market buy/sale history for Dead Frontier to instantly see your profit and losses
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
