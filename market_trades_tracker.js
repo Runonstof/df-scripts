@@ -101,7 +101,7 @@
                 historyEntries = historyEntries.filter(entry => {
 
                     // Check by item id
-                    if (this.selectedItem && getBaseItemId(entry.item) != HISTORY.selectedItem) {
+                    if (this.selectedItem && (!entry.item || getBaseItemId(entry.item) != HISTORY.selectedItem)) {
                         return false;
                     }
 
@@ -2611,13 +2611,20 @@
                                     if (isPending) {
                                         row.classList.add("pending");
                                     }
-                                    row.setAttribute("data-type", entry.item);
-                                    row.setAttribute("data-quantity", entry.quantity);
-                                    row.setAttribute("data-price", entry.price);
+                                    row.setAttribute("data-type", entry.item || 'broken');
+                                    row.setAttribute("data-quantity", entry.quantity || 1);
+                                    row.setAttribute("data-price", entry.price || 0);
                                     row.setAttribute("data-trade-id", entry.trade_id);
 
                                     row.addEventListener('click', function () {
                                         if (pageLock) return;
+
+                                        const type = this.getAttribute('data-type');
+                                        if (type == 'broken') {
+                                            alert('Entry is broken, contact Runon with this data: ' + JSON.stringify(entry));
+                                            return;
+                                        }
+
                                         const tradeId = this.getAttribute('data-trade-id');
                                         const trade = HISTORY.cache.trade_id[tradeId];
                                         if (!trade) {
@@ -2629,14 +2636,14 @@
                                     });
 
         
-                                    let afterName = calcMCTag(entry.item, false, "span", "") || '';
+                                    let afterName = entry.item ? calcMCTag(entry.item, false, "span", "") || '' : '';
         
-                                    const itemId = getGlobalDataItemId(entry.item);
+                                    const itemId = entry.item ? getGlobalDataItemId(entry.item) : 'broken';
                                     const itemCat = getItemType(unsafeWindow.globalData[itemId]);
                                     if (itemCat == 'ammo') {
                                         afterName += ' <span>(' + entry.quantity + ')</span>';
                                     }
-                                    const displayPrice = formatMoney(entry.price, {showFree: true});
+                                    const displayPrice = formatMoney(entry.price || 0, {showFree: true});
                                     
                                     row.innerHTML = `
                                         <div class="itemName cashhack credits" data-cash="${entry.itemname}">${entry.itemname}</div>
@@ -3625,7 +3632,7 @@
         // When the sell is successful, DeadFrontier will do a new webCall to retrieve the new sell listing
         // We hook ONCE into this webCall, to retrieve the trade id
         const onSellSuccess = function (request, response) {
-            if (response.xhr.status == 200) {
+            if (response.xhr.status == 200 && response.dataObj.hasOwnProperty('OK')) {
                 HISTORY.onSellItem(request, response);
             }
 
