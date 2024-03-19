@@ -3625,14 +3625,14 @@
         if (response.xhr.status != 200) {
             return;
         }
-        if (!response.dataObj.hasOwnProperty('OK')) {
-            return;
-        }
+        // if (!response.dataObj.hasOwnProperty('OK') && response.dataObj.done != '1') {
+        //     return;
+        // }
         
         // When the sell is successful, DeadFrontier will do a new webCall to retrieve the new sell listing
         // We hook ONCE into this webCall, to retrieve the trade id
         const onSellSuccess = function (request, response) {
-            if (response.xhr.status == 200 && response.dataObj.done == '1') {
+            if (response.xhr.status == 200) {
                 HISTORY.onSellItem(request, response);
             }
             
@@ -3652,9 +3652,9 @@
         if (response.xhr.status != 200) {
             return;
         }
-        if (!response.dataObj.hasOwnProperty('OK')) {
-            return;
-        }
+        // if (!response.dataObj.hasOwnProperty('OK') && response.dataObj.done != '1') {
+        //     return;
+        // }
 
         // When the sell is successful, DeadFrontier will do a new webCall to retrieve the new sell listing
         // We hook ONCE into this webCall, to retrieve the trade id
@@ -3716,6 +3716,7 @@
         if (!response.dataObj.hasOwnProperty('OK')) {
             return;
         }
+
         const itemnum = request.params.itemnum;
         const quantity = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_quantity'];
         const itemTypeId = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_type'];
