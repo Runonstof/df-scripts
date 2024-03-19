@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Market History
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      1.9.1
 // @description  Keep track of your market buy/sale history for Dead Frontier to instantly see your profit and losses
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
@@ -276,9 +276,16 @@
         },
 
         // Remove trade from history
-        async removeTrade(tradeId) {
+        async removeTrade(tradeId, isIndex = false) {
             await this.load();
-            const index = this.entries.findIndex(entry => entry.trade_id === tradeId);
+            let index = isIndex ? tradeId : this.entries.findIndex(entry => entry.trade_id === tradeId);
+
+            if (isIndex) {
+                if (index < 0 || index >= this.entries.length) {
+                    return false;
+                }
+            }
+
             if (index == -1) {
                 return false;
             }
@@ -2630,6 +2637,13 @@
                                         const type = this.getAttribute('data-type');
                                         if (type == 'broken') {
                                             alert('Entry is broken, contact Runon with this data: ' + JSON.stringify(entry));
+
+                                            if (confirm('Remove this entry instead?')) {
+                                                // const tradeId = this.getAttribute('data-trade-id');
+                                                HISTORY.removeTrade(entryIndex, true);
+                                                loadMarket();
+                                            }
+
                                             return;
                                         }
 
