@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Market History
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      1.9
 // @description  Keep track of your market buy/sale history for Dead Frontier to instantly see your profit and losses
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
@@ -952,6 +952,8 @@
          * The response contains the trade id, which is what we need to keep track of the trade
          */
         onSellItem(request, response) {
+            // console.log('trying to push sell trade: ', JSON.stringify(response.dataObj, null, 4));
+            // console.log('Share this info with Runon if needed');
             const tradeCount = response.dataObj.tradelist_totalsales;
             if (tradeCount == 0) {
                 return;
@@ -1904,6 +1906,12 @@
             GM_addStyle_object(nestedSelector, nestedRules.rules);
         }
 
+    }
+
+    function stringExplode(string) {
+        return Object.fromEntries(
+            string.split("&").map((x) => x.split("="))
+        );
     }
 
     function realQuantity(quantity, itemcategory) {
@@ -3314,8 +3322,8 @@
         // Override the callback function to execute any hooks
         // This still executes the original callback function, but with our hooks
         const callbackWithHooks = function(data, status, xhr) {
-            const dataObj = Object.fromEntries(new URLSearchParams(data).entries());
-            const response = Object.fromEntries(new URLSearchParams(xhr.responseText).entries());
+            const dataObj = stringExplode(data)
+            const response = stringExplode(xhr.responseText);
 
             // Call all 'before' hooks
             if (WEBCALL_HOOKS.before.hasOwnProperty(call)) {
