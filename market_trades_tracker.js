@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Market History
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.8
 // @description  Keep track of your market buy/sale history for Dead Frontier to instantly see your profit and losses
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
@@ -3628,18 +3628,18 @@
         if (!response.dataObj.hasOwnProperty('OK')) {
             return;
         }
-
+        
         // When the sell is successful, DeadFrontier will do a new webCall to retrieve the new sell listing
         // We hook ONCE into this webCall, to retrieve the trade id
         const onSellSuccess = function (request, response) {
-            if (response.xhr.status == 200 && response.dataObj.hasOwnProperty('OK')) {
+            if (response.xhr.status == 200 && response.dataObj.done == '1') {
                 HISTORY.onSellItem(request, response);
             }
-
+            
             // Remove self from hook
             offAfterWebCall('trade_search', onSellSuccess);
         };
-
+        
         // Hook into the new sell listing webCall
         onAfterWebCall('trade_search', onSellSuccess);
     });
@@ -3719,6 +3719,21 @@
         const itemnum = request.params.itemnum;
         const quantity = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_quantity'];
         const itemTypeId = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_type'];
+
+        if (!itemTypeId) {
+            const logData = {
+                price: request.params.price,
+                item: request.params.expected_itemtype,
+                itemnum,
+                itemTypeId,
+                quantity,
+            };
+            alert('Error: Could not find item type id for scrapped item\n\nContact Runonstof with this data: ' + JSON.stringify(logData));
+            alert('You can also check the console (F12) for the data to share with Runonstof');
+            console.info(JSON.stringify(logData, null, 2));
+            console.info('Only share above data with Runonstof');
+            return;
+        }
 
         const entry = {
             trade_id: hash(objectJoin(request.params)),
