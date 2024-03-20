@@ -17,19 +17,67 @@
 
     
     /******************************************************
+     * Credits:
+     * 
+     * - To Rebekah (TectonicStupidity) for the calculation of hits per second
+     ******************************************************/
+
+
+    /******************************************************
      * Constants
      ******************************************************/
 
-    const HPS_TABLE = {
-        'Very Slow': 0.968,
-        'Slow': 1.429,
-        'Average': 1.875,
-        'Fast': 2.727,
-        'Very Fast': 6.667,
-        'Super Fast': 8.571,
-        'F***ing Fast!': 8.696,
-        'Insanely Fast!': 15,
-    };
+    const weaponData = {};
+
+    if (!unsafeWindow.userVars.hasOwnProperty("GLOBALDATA_maxweapons")) {
+        return;
+    }
+
+    const maxWeapons = unsafeWindow.userVars.GLOBALDATA_maxweapons;
+
+    const weaponAttributes = [
+        'name',
+        'code',
+        'type',
+        'ammo_type',
+        'shot_time',
+        'shots_fired',
+        'spread',
+        'shot_size',
+        'calliber_type',
+        'bullet_capacity',
+        'reload_time',
+        'turn_speed_multi',
+        'knockback_multi',
+        'melee',
+        'chainsaw',
+        'explosive',
+        'flamethrower',
+        'critical',
+        'spin_delay',
+        'accuracy_mod',
+        'str_req',
+        'pro_req',
+        'cost',
+        'shop_level',
+        'avatar_img',
+        '3dtype',
+        'dismantle',
+    ];
+
+    for(let i = 1; i <= maxWeapons; i++) {
+        let weaponCode = unsafeWindow.userVars[`GLOBALDATA_weapon${i}_code`];
+
+
+        weaponData[weaponCode] = {};
+
+        for (let j = 0; j < weaponAttributes.length; j++) {
+            let attribute = weaponAttributes[j];
+            weaponData[weaponCode][attribute] = unsafeWindow.userVars[`GLOBALDATA_weapon${i}_${attribute}`];
+        }
+    }
+
+    unsafeWindow.weaponData = weaponData;
 
     // https://deadfrontier.fandom.com/wiki/Stats_and_Levels#Critical_Hit
     const CRIT_MULTIPLIER = 5;
@@ -60,11 +108,12 @@
             dps: 0,
         };
 
-        if (!unsafeWindow.globalData.hasOwnProperty(itemId)) {
+        if (!unsafeWindow.globalData.hasOwnProperty(itemId) || !weaponData.hasOwnProperty(itemId)) {
             return false
         }
 
         const itemData = unsafeWindow.globalData[itemId];
+        const weapData = weaponData[itemId];
 
         if (itemData.itemcat != 'weapon') {
             return false;
@@ -74,14 +123,15 @@
         stats.hits = Math.max(parseInt(itemData.shots_fired), 1);
         
         if (itemData.shot_time) {
-            const compareShotTime = itemData.shot_time.replace(/ (Attack|Firing) Speed$/, '');
-            stats.hps = HPS_TABLE[compareShotTime] || 0;
+            // Credits to Rebekah (TectonicStupidity) for this calculation
+            stats.hps = Math.round(60/(parseFloat(weapData.shot_time) + 2) * 1000) / 1000;
         }
       
         stats.dph = parseFloat(itemData.calliber_type) + 1;
 
         if (itemData.selective_fire_type == 'burst') {
             stats.hits *= parseFloat(itemData.selective_fire_amount);
+            stats.hps *= parseFloat(itemData.selective_fire_amount);
             stats.dph /= Math.max(parseInt(itemData.selective_fire_amount), 1);
         }
 
