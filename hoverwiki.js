@@ -29,7 +29,7 @@
 
     const weaponData = {};
 
-    if (!unsafeWindow.userVars.hasOwnProperty("GLOBALDATA_maxweapons")) {
+    if (!unsafeWindow.userVars?.hasOwnProperty("GLOBALDATA_maxweapons")) {
         return;
     }
 
@@ -141,6 +141,10 @@
         
         if (itemData.critical && !itemData.critical.includes('Zero')) {
             stats.cdpah = stats.dpah * CRIT_MULTIPLIER;
+        }
+        
+        if (itemData.selective_fire_type == 'burst') {
+            stats.dps /= Math.max(parseInt(itemData.selective_fire_amount), 1);
         }
 
         return CACHE.STATS[itemId] = stats;
