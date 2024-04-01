@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Market History
 // @namespace    http://tampermonkey.net/
-// @version      1.9.4
+// @version      1.8
 // @description  Keep track of your market buy/sale history for Dead Frontier to instantly see your profit and losses
 // @author       Runonstof
 // @match        *fairview.deadfrontier.com/onlinezombiemmo/index.php*
@@ -10,8 +10,8 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @license      MIT
-// @downloadURL  https://update.greasyfork.org/scripts/485526/market-history.user.js
-// @updateURL    https://update.greasyfork.org/scripts/485526/market-history.meta.js
+// @downloadURL https://update.greasyfork.org/scripts/485526/Market%20History.user.js
+// @updateURL https://update.greasyfork.org/scripts/485526/Market%20History.meta.js
 // ==/UserScript==
 
 (async function() {
@@ -276,16 +276,9 @@
         },
 
         // Remove trade from history
-        async removeTrade(tradeId, isIndex = false) {
+        async removeTrade(tradeId) {
             await this.load();
-            let index = isIndex ? tradeId : this.entries.findIndex(entry => entry.trade_id === tradeId);
-
-            if (isIndex) {
-                if (index < 0 || index >= this.entries.length) {
-                    return false;
-                }
-            }
-
+            const index = this.entries.findIndex(entry => entry.trade_id === tradeId);
             if (index == -1) {
                 return false;
             }
@@ -959,8 +952,6 @@
          * The response contains the trade id, which is what we need to keep track of the trade
          */
         onSellItem(request, response) {
-            // console.log('trying to push sell trade: ', JSON.stringify(response.dataObj, null, 4));
-            // console.log('Share this info with Runon if needed');
             const tradeCount = response.dataObj.tradelist_totalsales;
             if (tradeCount == 0) {
                 return;
@@ -1042,13 +1033,6 @@
                         title: 'Export',
                         action() {
                             SETTINGS.renderSettingsPrompt('export');
-                        }
-                    },
-                    import: {
-                        type: 'button',
-                        title: 'Export',
-                        action() {
-                            SETTINGS.renderSettingsPrompt('import');
                         }
                     },
                     actions: {
@@ -1287,10 +1271,6 @@
                     {
                         label: 'yes',
                         async action() {
-                            if (!confirm('Are you really sure? All entries OLDER than the selected timeframe will be deleted!')) {
-                                return;
-                            }
-
                             if (SETTINGS.values.clearHistoryTimeframe == 'all') {
                                 await HISTORY.clearEntries();
                             } else {
@@ -1315,7 +1295,7 @@
             },
             credits: {
                 title: 'Credits',
-                text: 'This script was made by <span style="color: #FF0000">Runonstof</span>. Alot of bugs found by <span style="color: #FF0000">TurboBongRips3</span>, major thanks to him. If you have any questions or suggestions, feel free to contact me on Discord: <span style="color: #FF0000">runon</span>',
+                text: 'This script was made by <span style="color: #FF0000">Runonstof</span>. If you have any questions or suggestions, feel free to contact me on Discord: <span style="color: #FF0000">runon</span>',
                 elements: {
                     donate: {
                         type: 'button',
@@ -1924,12 +1904,6 @@
             GM_addStyle_object(nestedSelector, nestedRules.rules);
         }
 
-    }
-
-    function stringExplode(string) {
-        return Object.fromEntries(
-            string.split("&").map((x) => x.split("="))
-        );
     }
 
     function realQuantity(quantity, itemcategory) {
@@ -2648,24 +2622,13 @@
                                         const type = this.getAttribute('data-type');
                                         if (type == 'broken') {
                                             alert('Entry is broken, contact Runon with this data: ' + JSON.stringify(entry));
-
-                                            if (confirm('Remove this entry instead?')) {
-                                                // const tradeId = this.getAttribute('data-trade-id');
-                                                HISTORY.removeTrade(entryIndex, true);
-                                                loadMarket();
-                                            }
-
                                             return;
                                         }
 
                                         const tradeId = this.getAttribute('data-trade-id');
-                                        let trade = HISTORY.cache.trade_id[tradeId];
+                                        const trade = HISTORY.cache.trade_id[tradeId];
                                         if (!trade) {
-                                            trade = HISTORY.entries.find(trade => trade.trade_id == tradeId);
-                                        }
-
-                                        if (!trade) {
-                                            alert('Could not find trade in cache or entries (ID: ' + tradeId + ')');
+                                            alert('Could not find trade in cache');
                                             return;
                                         }
 
@@ -3351,8 +3314,8 @@
         // Override the callback function to execute any hooks
         // This still executes the original callback function, but with our hooks
         const callbackWithHooks = function(data, status, xhr) {
-            const dataObj = stringExplode(data)
-            const response = stringExplode(xhr.responseText);
+            const dataObj = Object.fromEntries(new URLSearchParams(data).entries());
+            const response = Object.fromEntries(new URLSearchParams(xhr.responseText).entries());
 
             // Call all 'before' hooks
             if (WEBCALL_HOOKS.before.hasOwnProperty(call)) {
@@ -3662,14 +3625,14 @@
         if (response.xhr.status != 200) {
             return;
         }
-        // if (!response.dataObj.hasOwnProperty('OK') && response.dataObj.done != '1') {
-        //     return;
-        // }
+        if (!response.dataObj.hasOwnProperty('OK')) {
+            return;
+        }
         
         // When the sell is successful, DeadFrontier will do a new webCall to retrieve the new sell listing
         // We hook ONCE into this webCall, to retrieve the trade id
         const onSellSuccess = function (request, response) {
-            if (response.xhr.status == 200) {
+            if (response.xhr.status == 200 && response.dataObj.done == '1') {
                 HISTORY.onSellItem(request, response);
             }
             
@@ -3689,9 +3652,9 @@
         if (response.xhr.status != 200) {
             return;
         }
-        // if (!response.dataObj.hasOwnProperty('OK') && response.dataObj.done != '1') {
-        //     return;
-        // }
+        if (!response.dataObj.hasOwnProperty('OK')) {
+            return;
+        }
 
         // When the sell is successful, DeadFrontier will do a new webCall to retrieve the new sell listing
         // We hook ONCE into this webCall, to retrieve the trade id
@@ -3753,7 +3716,6 @@
         if (!response.dataObj.hasOwnProperty('OK')) {
             return;
         }
-
         const itemnum = request.params.itemnum;
         const quantity = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_quantity'];
         const itemTypeId = unsafeWindow.userVars['DFSTATS_df_inv' + itemnum + '_type'];
